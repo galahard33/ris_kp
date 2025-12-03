@@ -25,7 +25,7 @@ class Program
             return;
         }
 
-        var listener = new TcpListener(IPAddress.Loopback, port);
+        var listener = new TcpListener(IPAddress.Any, port);
         listener.Start();
         Console.WriteLine($"[Worker {port}] Слушаю порт {port}");
 
@@ -241,6 +241,38 @@ class Program
                             await writer.WriteLineAsync("OK");
                             Console.WriteLine($"[Worker {port}] Пакет шага {k} обработан успешно");
                         }
+                        else if (line.StartsWith("NORMALIZE_ROW"))
+                            {
+                                var parts = line.Split(' ');
+                                int row = int.Parse(parts[1]);
+                                double divisor = double.Parse(parts[2]);
+                                
+                                // Делим строку row на всех столбцах
+                                foreach (var col in localColumns.Values)
+                                {
+                                    if (row < col.Length)
+                                    {
+                                        col[row] /= divisor;
+                                    }
+                                }
+                                
+                                await writer.WriteLineAsync("OK");
+                            }
+                            else if (line.StartsWith("GET_ELEMENT"))
+                                {
+                                    var parts = line.Split(' ');
+                                    int row = int.Parse(parts[1]);
+                                    int colIndex = int.Parse(parts[2]);
+                                    
+                                    if (localColumns.TryGetValue(colIndex, out var column) && row < column.Length)
+                                    {
+                                        await writer.WriteLineAsync(column[row].ToString("R"));
+                                    }
+                                    else
+                                    {
+                                        await writer.WriteLineAsync("0");
+                                    }
+                                }
                         else if (line == "GET_MATRIX")
                         {
                             // Отправляем все столбцы, которые храним
