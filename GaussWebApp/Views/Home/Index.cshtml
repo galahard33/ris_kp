@@ -1,0 +1,558 @@
+﻿@model GaussWebApp.Models.GaussViewModel
+
+@section Styles {
+    <style>
+        .preview-box { background: #f9f9f9; border-left: 4px solid #0d6efd; padding: 12px; border-radius: 6px; 
+                      font-family: Consolas, monospace; font-size: 0.85rem; max-height: 300px; overflow: auto; }
+        .method-selector { border: 2px solid #e9ecef; border-radius: 8px; padding: 15px; transition: all 0.3s; }
+        .method-selector:hover { border-color: #0d6efd; background-color: #f8f9fa; }
+        .method-selected { border-color: #0d6efd; background-color: #e7f1ff; }
+        .radio-label { cursor: pointer; }
+        .solution-row { border-bottom: 1px solid #dee2e6; padding: 8px 0; }
+        .solution-row:last-child { border-bottom: none; }
+        .equation-line { font-family: Consolas, monospace; font-size: 0.85rem; }
+        .method-badge { font-size: 0.75rem; padding: 2px 6px; margin-right: 8px; }
+    </style>
+}
+
+@{
+    // Устанавливаем значение по умолчанию, если оно пустое
+    var matrixSizeValue = Model.MatrixSize > 0 ? Model.MatrixSize : 1000;
+    var threadCountValue = Model.ThreadCount > 0 ? Model.ThreadCount : 4;
+    
+    // Создаем словарь для определения выбранного option
+    var threadOptions = new Dictionary<int, bool>
+    {
+        { 1, threadCountValue == 1 },
+        { 2, threadCountValue == 2 },
+        { 4, threadCountValue == 4 },
+        { 8, threadCountValue == 8 },
+        { 16, threadCountValue == 16 }
+    };
+}
+
+<div class="container py-4">
+    <div class="row justify-content-center">
+        <div class="col-lg-10">
+            <div class="text-center mb-5">
+                <p class="lead text-muted">
+                    Сравнение параллельных и распределенных вычислений
+                </p>
+            </div>
+
+            <form method="post" enctype="multipart/form-data" id="gaussForm">
+                <div class="row g-4">
+                    <!-- Выбор метода вычислений -->
+                    <div class="col-12">
+                        <label class="form-label fw-bold mb-3">Метод вычислений:</label>
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <div class="method-selector @(Model.CalculationMethod == CalculationMethod.Parallel ? "method-selected" : "")"
+                                     onclick="selectMethod('Parallel')">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="radio" name="CalculationMethod" 
+                                               id="methodParallel" value="Parallel" 
+                                               @(Model.CalculationMethod == CalculationMethod.Parallel ? "checked" : "")>
+                                        <label class="form-check-label radio-label" for="methodParallel">
+                                            <h5 class="mb-1"><i class="bi bi-cpu"></i> Параллельный</h5>
+                                            <p class="text-muted mb-0">Многопоточное вычисление на одном компьютере</p>
+                                        </label>
+                                    </div>
+                                    
+                                    <!-- Настройки параллельного метода -->
+                                    <div id="parallelSettings" class="mt-3 @(Model.CalculationMethod != CalculationMethod.Parallel ? "d-none" : "")">
+                                        <div class="form-floating">
+                                            <select class="form-select" id="ThreadCount" name="ThreadCount">
+                                                @if (threadOptions[1])
+                                                {
+                                                    <option value="1" selected>1 поток</option>
+                                                }
+                                                else
+                                                {
+                                                    <option value="1">1 поток</option>
+                                                }
+                                                
+                                                @if (threadOptions[2])
+                                                {
+                                                    <option value="2" selected>2 потока</option>
+                                                }
+                                                else
+                                                {
+                                                    <option value="2">2 потока</option>
+                                                }
+                                                
+                                                @if (threadOptions[4])
+                                                {
+                                                    <option value="4" selected>4 потока</option>
+                                                }
+                                                else
+                                                {
+                                                    <option value="4">4 потока</option>
+                                                }
+                                                
+                                                @if (threadOptions[8])
+                                                {
+                                                    <option value="8" selected>8 потоков</option>
+                                                }
+                                                else
+                                                {
+                                                    <option value="8">8 потоков</option>
+                                                }
+                                                
+                                                @if (threadOptions[16])
+                                                {
+                                                    <option value="16" selected>16 потоков</option>
+                                                }
+                                                else
+                                                {
+                                                    <option value="16">16 потоков</option>
+                                                }
+                                            </select>
+                                            <label for="ThreadCount">Число потоков</label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="col-md-6 mb-3">
+                                <div class="method-selector @(Model.CalculationMethod == CalculationMethod.Distributed ? "method-selected" : "")"
+                                     onclick="selectMethod('Distributed')">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="radio" name="CalculationMethod" 
+                                               id="methodDistributed" value="Distributed"
+                                               @(Model.CalculationMethod == CalculationMethod.Distributed ? "checked" : "")>
+                                        <label class="form-check-label radio-label" for="methodDistributed">
+                                            <h5 class="mb-1"><i class="bi bi-diagram-3"></i> Распределенный</h5>
+                                            <p class="text-muted mb-0">Вычисление на нескольких узлах (из nodes.txt)</p>
+                                        </label>
+                                    </div>
+                                    
+                                    <!-- Информация о распределенном методе -->
+                                    <div id="distributedInfo" class="mt-3 @(Model.CalculationMethod != CalculationMethod.Distributed ? "d-none" : "")">
+                                        <div class="alert alert-info small">
+                                            <i class="bi bi-info-circle"></i> 
+                                            Используются узлы из файла <code>nodes.txt</code> в формате <code>адрес:порт</code>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Размер матрицы -->
+                    <div class="col-md-6">
+                        <div class="form-floating">
+                            <input type="number" class="form-control" id="MatrixSize" name="MatrixSize"
+                                   value="@matrixSizeValue" min="100" max="5000" required />
+                            <label for="MatrixSize">Размер матрицы (N)</label>
+                        </div>
+                        <div class="form-text text-muted">
+                            <i class="bi bi-info-circle"></i> От 100 до 5000
+                        </div>
+                    </div>
+
+                    <!-- Статистика по узлам -->
+                    <div class="col-md-6">
+                        <div class="form-floating">
+                            <input type="text" class="form-control config-display" 
+                                   value="@(Model.CalculationMethod == CalculationMethod.Distributed ? 
+                                           "Узлы из nodes.txt" : 
+                                           $"{threadCountValue} поток(а)")" 
+                                   disabled />
+                            <label>Конфигурация</label>
+                        </div>
+                    </div>
+
+                    <!-- Загрузка файла -->
+                    <div class="col-12">
+                        <label class="form-label">Загрузить свою матрицу (опционально)</label>
+                        <div class="input-group">
+                            <input type="file" class="form-control" name="UploadedFile" accept=".txt"
+                                   id="fileInput" onchange="updateFileLabel()" />
+                            <span class="input-group-text" id="fileLabel">Выберите файл...</span>
+                        </div>
+                        <div class="form-text text-muted">
+                            <i class="bi bi-file-text"></i>
+                            Формат: первая строка — N, затем N строк вида: <code>a11 a12 ... | b1</code>
+                        </div>
+                    </div>
+
+                    <!-- Кнопки -->
+                    <div class="col-12 d-flex gap-3 flex-wrap">
+                        <button type="submit" class="btn btn-primary btn-lg flex-grow-1" id="solveBtn">
+                            <i class="bi bi-play-circle"></i> Решить
+                        </button>
+                        <button type="submit" name="RequestDownload" value="true"
+                                class="btn btn-outline-secondary btn-lg flex-grow-1" id="downloadBtn">
+                            <i class="bi bi-download"></i> Скачать матрицу (@matrixSizeValue×@matrixSizeValue)
+                        </button>
+                    </div>
+                </div>
+            </form>
+
+            <!-- Прогресс -->
+            <div id="loading" class="mt-4 d-none">
+                <div class="d-flex align-items-center">
+                    <div class="spinner-border text-primary me-3" role="status"></div>
+                    <strong>Выполняется расчёт...</strong>
+                    <span class="ms-2 text-muted" id="methodInfo"></span>
+                </div>
+            </div>
+
+            <!-- Результаты -->
+            @if (Model.HasResult)
+            {
+                <div class="result-card mt-5">
+                    <div class="card border-0 shadow">
+                        <div class="card-header bg-primary text-white">
+                            <h5 class="mb-0">
+                                <i class="bi bi-graph-up"></i> Результаты расчёта
+                                <span class="badge bg-light text-dark ms-2">
+                                    @(Model.CalculationMethod == CalculationMethod.Parallel ? 
+                                      "Параллельный" : "Распределенный")
+                                </span>
+                            </h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <ul class="list-group list-group-flush">
+                                        <li class="list-group-item">
+                                            <strong>Размер:</strong> @Model.MatrixSize×@Model.MatrixSize
+                                        </li>
+                                        <li class="list-group-item">
+                                            <strong>Метод:</strong> 
+                                            @(Model.CalculationMethod == CalculationMethod.Parallel ? 
+                                              $"Параллельный ({Model.ThreadCount} потоков)" : 
+                                              $"Распределенный ({Model.NodeCount} узлов)")
+                                        </li>
+                                        <li class="list-group-item">
+                                            <strong>Однопоточно:</strong> @($"{Model.TimeSequential:F3} с")
+                                        </li>
+                                        <li class="list-group-item">
+                                            <strong>@(Model.CalculationMethod == CalculationMethod.Parallel ? 
+                                                    "Параллельно" : "Распределенно"):</strong> 
+                                            @($"{Model.TimeParallel:F3} с")
+                                        </li>
+                                        <li class="list-group-item">
+                                            <strong>Ускорение:</strong> 
+                                            <span class="@(Model.Speedup >= 1 ? "text-success" : "text-warning") fw-bold">
+                                                @($"{Model.Speedup:F2}×")
+                                            </span>
+                                        </li>
+                                        <li class="list-group-item">
+                                            <strong>Макс. ошибка:</strong> 
+                                            <span class="@(Model.MaxError < 1e-6 ? "text-success" : "text-warning")">
+                                                @($"{Model.MaxError:E3}")
+                                            </span>
+                                        </li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- РЯД 1: Первые 20 уравнений исходной матрицы -->
+                    <div class="row mt-4">
+                        <div class="col-12">
+                            <h6><i class="bi bi-grid-3x3"></i> Первые 20 уравнений исходной матрицы</h6>
+                            <div class="preview-box mt-2">
+                                @if (Model.MatrixPreview != null && Model.MatrixPreview.Length > 0)
+                                {
+                                    var maxRows = Math.Min(20, Model.MatrixPreview.Length);
+                                    for (int i = 0; i < maxRows; i++)
+                                    {
+                                        <div class="equation-line">@Model.MatrixPreview[i]</div>
+                                    }
+                                    
+                                    @if (Model.MatrixPreview.Length > 20)
+                                    {
+                                        <div class="text-muted mt-2">... и еще @(Model.MatrixPreview.Length - 20) уравнений</div>
+                                    }
+                                }
+                                else
+                                {
+                                    <div class="text-muted">Уравнения не загружены</div>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- РЯД 2: Первые 20 решений обоих методов -->
+                    <div class="row mt-4">
+                        <div class="col-12">
+                            <h6><i class="bi bi-calculator"></i> Первые 20 решений</h6>
+                            <div class="card mt-2">
+                                <div class="card-body p-0">
+                                    <div class="table-responsive">
+                                        <table class="table table-hover mb-0">
+                                            <thead class="table-light">
+                                                <tr>
+                                                    <th style="width: 80px">№</th>
+                                                    <th>Однопоточное решение</th>
+                                                    <th>
+                                                        @(Model.CalculationMethod == CalculationMethod.Parallel ? 
+                                                          "Параллельное решение" : "Распределенное решение")
+                                                    </th>
+                                                    <th style="width: 150px">Разница</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                @if (Model.SequentialSolutionPreview != null && Model.ParallelSolutionPreview != null)
+                                                {
+                                                    var maxSolutions = Math.Min(20, 
+                                                        Math.Min(Model.SequentialSolutionPreview.Length, 
+                                                               Model.ParallelSolutionPreview.Length));
+                                                    
+                                                    for (int i = 0; i < maxSolutions; i++)
+                                                    {
+                                                        // Извлекаем значения из строк решения
+                                                        var seqLine = Model.SequentialSolutionPreview[i];
+                                                        var parLine = Model.ParallelSolutionPreview[i];
+                                                        
+                                                        // Парсим значения (предполагаем формат: "x[0] = 1.234567")
+                                                        double seqValue = 0, parValue = 0;
+                                                        bool seqParsed = false, parParsed = false;
+                                                        
+                                                        if (seqLine.Contains("="))
+                                                        {
+                                                            var seqParts = seqLine.Split('=');
+                                                            if (seqParts.Length == 2)
+                                                            {
+                                                                double.TryParse(seqParts[1].Trim(), out seqValue);
+                                                                seqParsed = true;
+                                                            }
+                                                        }
+                                                        
+                                                        if (parLine.Contains("="))
+                                                        {
+                                                            var parParts = parLine.Split('=');
+                                                            if (parParts.Length == 2)
+                                                            {
+                                                                double.TryParse(parParts[1].Trim(), out parValue);
+                                                                parParsed = true;
+                                                            }
+                                                        }
+                                                        
+                                                        var difference = seqParsed && parParsed ? Math.Abs(seqValue - parValue) : 0;
+                                                        var diffClass = difference < 1e-6 ? "text-success" : 
+                                                                       difference < 1e-3 ? "text-warning" : "text-danger";
+                                                        
+                                                        <tr class="solution-row">
+                                                            <td class="fw-bold">x[@i]</td>
+                                                            <td>
+                                                                <div class="d-flex align-items-center">
+                                                                    <span class="badge bg-info method-badge">Seq</span>
+                                                                    <span>@seqLine</span>
+                                                                </div>
+                                                            </td>
+                                                            <td>
+                                                                <div class="d-flex align-items-center">
+                                                                    <span class="badge @(Model.CalculationMethod == CalculationMethod.Parallel ? "bg-warning" : "bg-danger") method-badge">
+                                                                        @(Model.CalculationMethod == CalculationMethod.Parallel ? "Par" : "Dist")
+                                                                    </span>
+                                                                    <span>@parLine</span>
+                                                                </div>
+                                                            </td>
+                                                            <td class="@diffClass fw-bold">
+                                                                @if (seqParsed && parParsed)
+                                                                {
+                                                                    @($"{difference:E3}")
+                                                                }
+                                                                else
+                                                                {
+                                                                    <span class="text-muted">N/A</span>
+                                                                }
+                                                            </td>
+                                                        </tr>
+                                                    }
+                                                    
+                                                    @if (maxSolutions < 20 && (Model.SequentialSolutionPreview.Length > 0 || Model.ParallelSolutionPreview.Length > 0))
+                                                    {
+                                                        <tr>
+                                                            <td colspan="4" class="text-center text-muted py-3">
+                                                                <i class="bi bi-info-circle"></i>
+                                                                Показаны все доступные решения (@maxSolutions из 20)
+                                                            </td>
+                                                        </tr>
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    <tr>
+                                                        <td colspan="4" class="text-center text-muted py-3">
+                                                            <i class="bi bi-exclamation-triangle"></i>
+                                                            Решения не загружены
+                                                        </td>
+                                                    </tr>
+                                                }
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+    <script>
+        // Сохраняем значения перед изменением
+        let currentMatrixSize = @matrixSizeValue;
+        let currentThreadCount = @threadCountValue;
+
+        function selectMethod(method) {
+            // Сохраняем текущие значения
+            const matrixSizeInput = document.getElementById('MatrixSize');
+            const threadCountInput = document.getElementById('ThreadCount');
+            const configDisplay = document.querySelector('.config-display');
+            
+            if (matrixSizeInput) {
+                currentMatrixSize = matrixSizeInput.value || 1000;
+            }
+            
+            if (threadCountInput) {
+                currentThreadCount = threadCountInput.value || 4;
+            }
+            
+            // Обновляем radio button
+            const radioBtn = document.querySelector(`input[value="${method}"]`);
+            if (radioBtn) {
+                radioBtn.checked = true;
+            }
+            
+            // Обновляем стили блоков
+            document.querySelectorAll('.method-selector').forEach(el => {
+                el.classList.remove('method-selected');
+            });
+            if (event && event.currentTarget) {
+                event.currentTarget.classList.add('method-selected');
+            }
+            
+            // Показываем/скрываем настройки
+            const parallelSettings = document.getElementById('parallelSettings');
+            const distributedInfo = document.getElementById('distributedInfo');
+            
+            if (method === 'Parallel') {
+                if (parallelSettings) parallelSettings.classList.remove('d-none');
+                if (distributedInfo) distributedInfo.classList.add('d-none');
+                if (configDisplay) configDisplay.value = currentThreadCount + ' поток(а)';
+            } else {
+                if (parallelSettings) parallelSettings.classList.add('d-none');
+                if (distributedInfo) distributedInfo.classList.remove('d-none');
+                if (configDisplay) configDisplay.value = 'Узлы из nodes.txt';
+            }
+            
+            // Восстанавливаем значения
+            if (matrixSizeInput) {
+                matrixSizeInput.value = currentMatrixSize;
+            }
+            
+            if (threadCountInput && method === 'Parallel') {
+                threadCountInput.value = currentThreadCount;
+            }
+            
+            // Обновляем кнопку скачивания
+            updateDownloadButton(currentMatrixSize);
+        }
+
+        function updateDownloadButton(size) {
+            const n = size || 1000;
+            const downloadBtn = document.getElementById('downloadBtn');
+            if (downloadBtn) {
+                downloadBtn.innerHTML = `<i class="bi bi-download"></i> Скачать матрицу (${n}×${n})`;
+            }
+        }
+        
+        // Инициализация при загрузке страницы
+        document.addEventListener('DOMContentLoaded', function() {
+            // Устанавливаем начальные значения
+            updateDownloadButton(currentMatrixSize);
+            
+            // Обработчик изменения размера матрицы
+            const matrixSizeInput = document.getElementById('MatrixSize');
+            if (matrixSizeInput) {
+                matrixSizeInput.addEventListener('input', function() {
+                    currentMatrixSize = this.value || 1000;
+                    updateDownloadButton(currentMatrixSize);
+                });
+            }
+            
+            // Обработчик изменения числа потоков
+            const threadCountInput = document.getElementById('ThreadCount');
+            if (threadCountInput) {
+                threadCountInput.addEventListener('change', function() {
+                    currentThreadCount = this.value || 4;
+                    const configDisplay = document.querySelector('.config-display');
+                    if (configDisplay && document.getElementById('methodParallel')?.checked) {
+                        configDisplay.value = currentThreadCount + ' поток(а)';
+                    }
+                });
+            }
+            
+            // Проверяем выбранный метод при загрузке
+            const selectedMethod = document.querySelector('input[name="CalculationMethod"]:checked');
+            if (selectedMethod) {
+                const method = selectedMethod.value;
+                const parallelSettings = document.getElementById('parallelSettings');
+                const distributedInfo = document.getElementById('distributedInfo');
+                
+                if (method === 'Parallel') {
+                    if (parallelSettings) parallelSettings.classList.remove('d-none');
+                    if (distributedInfo) distributedInfo.classList.add('d-none');
+                } else {
+                    if (parallelSettings) parallelSettings.classList.add('d-none');
+                    if (distributedInfo) distributedInfo.classList.remove('d-none');
+                }
+            }
+        });
+        
+        function updateFileLabel() {
+            const fileInput = document.getElementById('fileInput');
+            const fileLabel = document.getElementById('fileLabel');
+            if (fileInput && fileLabel) {
+                fileLabel.textContent = fileInput.files.length > 0 ? 
+                    fileInput.files[0].name : 'Выберите файл...';
+            }
+        }
+        
+        // Блокировка формы при отправке
+        const gaussForm = document.getElementById('gaussForm');
+        if (gaussForm) {
+            gaussForm.addEventListener('submit', function(e) {
+                const submitBtn = e.submitter;
+                if (submitBtn && submitBtn.name === 'RequestDownload') {
+                    return; // Не блокируем для скачивания
+                }
+                
+                const solveBtn = document.getElementById('solveBtn');
+                const downloadBtn = document.getElementById('downloadBtn');
+                const loading = document.getElementById('loading');
+                
+                if (solveBtn) {
+                    solveBtn.disabled = true;
+                    solveBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Выполняется...';
+                }
+                if (downloadBtn) downloadBtn.disabled = true;
+                if (loading) loading.classList.remove('d-none');
+                
+                // Показываем информацию о методе
+                const selectedMethod = document.querySelector('input[name="CalculationMethod"]:checked');
+                const methodInfo = document.getElementById('methodInfo');
+                if (selectedMethod && methodInfo) {
+                    const method = selectedMethod.value;
+                    if (method === 'Parallel') {
+                        const threadCount = document.getElementById('ThreadCount')?.value || '4';
+                        methodInfo.textContent = `(параллельный, ${threadCount} потоков)`;
+                    } else {
+                        methodInfo.textContent = '(распределенный)';
+                    }
+                }
+            });
+        }
+    </script>
+}
