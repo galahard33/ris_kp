@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  gauss-webapp:
+    build:
+      context: ./GaussWebApp
+      dockerfile: Dockerfile
+    container_name: gauss-webapp
+    ports:
+      - "5052:80"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:80
+      - ASPNETCORE_DATA_PROTECTION__KEYS__PATH=/app/dataprotection-keys
+    volumes:
+      - ./nodes.txt:/app/nodes.txt:ro
+      - ./data:/app/data
+      - dataprotection_keys:/app/dataprotection-keys
+    depends_on:
+      - gauss-worker-1
+      - gauss-worker-2
+    networks:
+      - gauss-network
+    restart: unless-stopped
+
+  gauss-worker-1:
+    build:
+      context: ./GaussWorker
+      dockerfile: Dockerfile
+    container_name: gauss-worker-1
+    command: "9001"
+    ports:
+      - "9001:9001"
+    networks:
+      - gauss-network
+    restart: unless-stopped
+
+  gauss-worker-2:
+    build:
+      context: ./GaussWorker
+      dockerfile: Dockerfile
+    container_name: gauss-worker-2
+    command: "9002"
+    ports:
+      - "9002:9002"
+    networks:
+      - gauss-network
+    restart: unless-stopped
+
+networks:
+  gauss-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  data:
+  dataprotection_keys:

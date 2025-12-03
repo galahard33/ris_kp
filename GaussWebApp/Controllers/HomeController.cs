@@ -222,18 +222,15 @@ namespace GaussWebApp.Controllers
 
                 // 6. Прямой ход метода Гаусса
                 Console.WriteLine($"[Контроллер] Начало прямого хода...");
-                var b_local = (double[])loadedB.Clone();
-                
-                for (int k = 0; k < n - 1; k++)
+    var b_local = (double[])loadedB.Clone();
+    
+    for (int k = 0; k < n - 1; k++)
     {
-        // 6.1. Выбор главного элемента - нужно получить столбец k
-        // Кто хранит столбец k?
+        // 6.1. Выбор главного элемента
         int workerWithColK = k % p;
         
-        // Запрашиваем у этого worker'а значения столбца k
         await writers[workerWithColK].WriteLineAsync($"GET_COLUMN {k}");
         
-        // Читаем столбец k
         var columnK = new double[n];
         string response = await readers[workerWithColK].ReadLineAsync();
         if (!response.StartsWith($"COLUMN {k}"))
@@ -242,7 +239,7 @@ namespace GaussWebApp.Controllers
         for (int i = 0; i < n; i++)
             columnK[i] = double.Parse(await readers[workerWithColK].ReadLineAsync() ?? "0");
 
-        // Находим строку с максимальным элементом в столбце k (начиная с k)
+        // Находим строку с максимальным элементом в столбце k
         int pivot = k;
         for (int i = k + 1; i < n; i++)
             if (Math.Abs(columnK[i]) > Math.Abs(columnK[pivot]))
@@ -251,7 +248,6 @@ namespace GaussWebApp.Controllers
         // 6.2. Обмен строками если нужно
         if (pivot != k)
         {
-            // Команда всем worker'ам обменять строки
             for (int w = 0; w < p; w++)
             {
                 await writers[w].WriteLineAsync($"SWAP_ROWS {k} {pivot}");
@@ -259,51 +255,106 @@ namespace GaussWebApp.Controllers
                     throw new Exception($"Worker {w} ошибка SWAP_ROWS");
             }
             
-            // Локальный обмен в векторе b
             (b_local[k], b_local[pivot]) = (b_local[pivot], b_local[k]);
+            
+            // Нужно обновить columnK после обмена строк
+            await writers[workerWithColK].WriteLineAsync($"GET_COLUMN {k}");
+            response = await readers[workerWithColK].ReadLineAsync();
+            for (int i = 0; i < n; i++)
+                columnK[i] = double.Parse(await readers[workerWithColK].ReadLineAsync() ?? "0");
         }
 
         // 6.3. Нормализация - делим строку k на A[k,k]
         double pivotValue = columnK[k];
         if (Math.Abs(pivotValue) < 1e-12)
             throw new Exception($"Матрица вырожденна на шаге {k}");
-    }
-
-                // 7. Получаем треугольную матрицу от worker'ов
-                Console.WriteLine($"[Контроллер] Получение треугольной матрицы от узлов...");
-var U = new double[n, n];
-    
-    for (int w = 0; w < p; w++)
-    {
-        await writers[w].WriteLineAsync("GET_MATRIX");
         
-        string line;
-        while ((line = await readers[w].ReadLineAsync()) != null)
+        // Обновляем строку k в векторе b
+        b_local[k] /= pivotValue;
+        
+        // Отправляем команду на нормализацию строки k всем воркерам
+        for (int w = 0; w < p; w++)
         {
-            if (line == "END_MATRIX") break;
+            await writers[w].WriteLineAsync($"NORMALIZE_ROW {k} {pivotValue}");
+            if (await readers[w].ReadLineAsync() != "OK")
+                throw new Exception($"Worker {w} ошибка NORMALIZE_ROW");
+        }
+
+        // 6.4. Исключение элементов ниже диагонали
+        // Нужно собрать все операции исключения и отправить пакетом каждому воркеру
+        for (int w = 0; w < p; w++)
+        {
+            // Для каждого воркера собираем только те строки, которые ему нужны
+            // (те, у которых соответствующие столбцы хранятся на этом воркере)
+            var operations = new List<string>();
             
-            if (line.StartsWith("COL"))
+            for (int i = k + 1; i < n; i++)
             {
-                int j = int.Parse(line.Split(' ')[1]);
-                for (int i = 0; i < n; i++)
+                // Вычисляем множитель для строки i
+                // Для этого нужно получить элемент A[i, k] у воркера, который хранит столбец k
+                if (w == workerWithColK)
                 {
-                    string val = await readers[w].ReadLineAsync() ?? "0";
-                    U[i, j] = double.Parse(val);
+                    // Этот воркер хранит столбец k, поэтому у него есть A[i, k]
+                    double factor = columnK[i]; // Это A[i, k] после обмена строк
+                    operations.Add($"{i} {factor}");
                 }
             }
+            
+            if (operations.Count > 0)
+            {
+                await writers[w].WriteLineAsync($"ELIMINATE_BATCH {k} {operations.Count}");
+                foreach (var op in operations)
+                    await writers[w].WriteLineAsync(op);
+                await writers[w].WriteLineAsync("END_BATCH");
+                
+                if (await readers[w].ReadLineAsync() != "OK")
+                    throw new Exception($"Worker {w} ошибка ELIMINATE_BATCH");
+            }
+        }
+        
+        // Обновляем b_local для строк ниже k
+        for (int i = k + 1; i < n; i++)
+        {
+            // Для этого нужно получить A[i, k] - должен быть сохранен где-то
+            double factor = columnK[i];
+            b_local[i] -= factor * b_local[k];
         }
     }
 
-                // 8. Обратный ход (локально)
-                Console.WriteLine($"[Контроллер] Выполнение обратного хода...");
-                solution = new double[n];
-                for (int i = n - 1; i >= 0; i--)
-                {
-                    solution[i] = b_local[i];
-                    for (int j = i + 1; j < n; j++)
-                        solution[i] -= U[i, j] * solution[j];
-                    solution[i] /= U[i, i];
-                }
+    // 7. После прямого хода все воркеры должны иметь верхнюю треугольную матрицу
+    // Получаем диагональные элементы для обратного хода
+    var diag = new double[n];
+    for (int k = 0; k < n; k++)
+    {
+        int workerIdx = k % p;
+        await writers[workerIdx].WriteLineAsync($"GET_ELEMENT {k} {k}");
+        string elem = await readers[workerIdx].ReadLineAsync();
+        diag[k] = double.Parse(elem);
+    }
+
+    // 8. Обратный ход
+    Console.WriteLine($"[Контроллер] Выполнение обратного хода...");
+    solution = new double[n];
+    
+    // Сначала выполняем обратный ход для верхней треугольной матрицы
+    for (int i = n - 1; i >= 0; i--)
+    {
+        solution[i] = b_local[i];
+        
+        // Для каждого j > i нужно вычислить сумму A[i,j]*x[j]
+        // A[i,j] распределены по разным воркерам
+        for (int j = i + 1; j < n; j++)
+        {
+            int workerIdx = j % p;
+            await writers[workerIdx].WriteLineAsync($"GET_ELEMENT {i} {j}");
+            string elem = await readers[workerIdx].ReadLineAsync();
+            double a_ij = double.Parse(elem);
+            solution[i] -= a_ij * solution[j];
+        }
+        
+        solution[i] /= diag[i];
+    }
+
 
                 // 9. Завершаем worker'ов
                 Console.WriteLine($"[Контроллер] Завершение работы узлов...");
