@@ -170,6 +170,63 @@ namespace GaussWebApp.Controllers
             
             double[] solution = null;
 
+            var _locks = new SemaphoreSlim[p];
+            for (int i = 0; i < p; i++)
+                _locks[i] = new SemaphoreSlim(1, 1); // 1 поток может войти
+
+                async Task<string> SendCommandWithLock(int worker, StreamWriter writer, StreamReader reader, string command)
+    {
+        await _locks[worker].WaitAsync();
+        try
+        {
+            await writer.WriteLineAsync(command);
+            return await reader.ReadLineAsync();
+        }
+        finally
+        {
+            _locks[worker].Release();
+        }
+    }
+    
+    // Локальная функция для отправки столбца с блокировкой
+    async Task SendColumnWithLock(int worker, int columnIndex)
+    {
+        await _locks[worker].WaitAsync();
+        try
+        {
+            await writers[worker].WriteLineAsync($"COL {columnIndex}");
+            for (int row = 0; row < n; row++)
+                await writers[worker].WriteLineAsync(loadedA[row, columnIndex].ToString("R"));
+        }
+        finally
+        {
+            _locks[worker].Release();
+        }
+    }
+    
+    // Локальная функция для получения столбца с блокировкой
+            async Task<double[]> GetColumnWithLock(int worker, int columnIndex)
+            {
+                await _locks[worker].WaitAsync();
+                try
+                {
+                    await writers[worker].WriteLineAsync($"GET_COLUMN {columnIndex}");
+                    string response = await readers[worker].ReadLineAsync();
+                    
+                    if (!response.StartsWith($"COLUMN {columnIndex}"))
+                        throw new Exception($"Ошибка получения столбца {columnIndex}: {response}");
+                        
+                    var column = new double[n];
+                    for (int i = 0; i < n; i++)
+                        column[i] = double.Parse(await readers[worker].ReadLineAsync() ?? "0");
+                        
+                    return column;
+                }
+                finally
+                {
+                    _locks[worker].Release();
+                }
+            }
             try
             {
                 // 1. Подключаемся ко всем worker'ам
@@ -190,26 +247,68 @@ namespace GaussWebApp.Controllers
 
                 // 3. Циклическое размещение столбцов матрицы A
                 Console.WriteLine($"[Контроллер] Распределение столбцов между {p} узлами...");
+                var columnTasks = new List<Task>();
                 for (int j = 0; j < n; j++)
                 {
-                    int nodeIdx = j % p;
-                    await writers[nodeIdx].WriteLineAsync($"COL {j}");
-                    for (int row = 0; row < n; row++)
-                        await writers[nodeIdx].WriteLineAsync(loadedA[row, j].ToString("R"));
+                    int columnIndex = j; // capture для замыкания
+                    int nodeIdx = columnIndex % p;
                     
-                    // Логирование прогресса
-                    // if (j % 100 == 0 && j > 0)
-                    //     Console.WriteLine($"[Контроллер] Отправлено {j}/{n} столбцов");
+                    columnTasks.Add(Task.Run(async () =>
+                    {
+                        await _locks[nodeIdx].WaitAsync();
+                        try
+                        {
+                            await writers[nodeIdx].WriteLineAsync($"COL {columnIndex}");
+                            for (int row = 0; row < n; row++)
+                                await writers[nodeIdx].WriteLineAsync(loadedA[row, columnIndex].ToString("R"));
+                        }
+                        finally
+                        {
+                            _locks[nodeIdx].Release();
+                        }
+                        
+                        // Логирование прогресса
+                        if (columnIndex % 100 == 0)
+                            Console.WriteLine($"[Контроллер] Отправлен столбец {columnIndex}/{n}");
+                    }));
+                    
+                    // Ограничиваем число одновременно выполняемых задач
+                    if (columnTasks.Count >= Environment.ProcessorCount * 2)
+                    {
+                        await Task.WhenAll(columnTasks);
+                        columnTasks.Clear();
+                    }
                 }
 
+                // Дожидаемся оставшихся задач
+                if (columnTasks.Count > 0)
+                    await Task.WhenAll(columnTasks);
+
                 // 4. Отправляем вектор b на КАЖДЫЙ узел
-                Console.WriteLine($"[Контроллер] Отправка вектора b...");
-                for (int i = 0; i < p; i++)
-                {
-                    await writers[i].WriteLineAsync("VECTOR_B");
-                    for (int row = 0; row < n; row++)
-                        await writers[i].WriteLineAsync(loadedB[row].ToString("R"));
-                }
+                    Console.WriteLine($"[Контроллер] Параллельная отправка вектора b на {p} узлов...");
+
+                    var vectorTasks = new List<Task>();
+                    for (int workerIndex = 0; workerIndex < p; workerIndex++)
+                    {
+                        int worker = workerIndex; // capture для замыкания
+                        
+                        vectorTasks.Add(Task.Run(async () =>
+                        {
+                            await _locks[worker].WaitAsync();
+                            try
+                            {
+                                await writers[worker].WriteLineAsync("VECTOR_B");
+                                for (int row = 0; row < n; row++)
+                                    await writers[worker].WriteLineAsync(loadedB[row].ToString("R"));
+                            }
+                            finally
+                            {
+                                _locks[worker].Release();
+                            }
+                        }));
+                    }
+
+                    await Task.WhenAll(vectorTasks);
 
                 // 5. Ждём READY от всех
                 Console.WriteLine($"[Контроллер] Ожидание готовности узлов...");
@@ -249,12 +348,32 @@ for (int k = 0; k < n - 1; k++)
     {
         Console.WriteLine($"[Контроллер] Обмен строк {k}<->{pivot} (макс элемент: {Math.Abs(localColumnK[pivot]):E6})");
         
-        for (int w = 0; w < p; w++)
-        {
-            await writers[w].WriteLineAsync($"SWAP_ROWS {k} {pivot}");
-            if (await readers[w].ReadLineAsync() != "OK")
-                throw new Exception($"Worker {w} ошибка SWAP_ROWS");
-        }
+            var swapTasks = new List<Task<string>>();
+            for (int w = 0; w < p; w++)
+            {
+                int worker = w; // capture
+                
+                swapTasks.Add(Task.Run(async () =>
+                {
+                    await _locks[worker].WaitAsync();
+                    try
+                    {
+                        await writers[worker].WriteLineAsync($"SWAP_ROWS {k} {pivot}");
+                        return await readers[worker].ReadLineAsync();
+                    }
+                    finally
+                    {
+                        _locks[worker].Release();
+                    }
+                }));
+            }
+
+            var swapResults = await Task.WhenAll(swapTasks);
+            for (int w = 0; w < p; w++)
+            {
+                if (swapResults[w] != "OK")
+                    throw new Exception($"Worker {w} ошибка SWAP_ROWS: {swapResults[w]}");
+            }
         
         // Обмен в локальном векторе b
         (b_local[k], b_local[pivot]) = (b_local[pivot], b_local[k]);
@@ -277,19 +396,41 @@ for (int k = 0; k < n - 1; k++)
     b_local[k] /= pivotValue;
     
     // Отправляем команды на нормализацию всем воркерам
-    for (int w = 0; w < p; w++)
-    {
-        // Нормализуем строку k в матрице A
-        await writers[w].WriteLineAsync($"NORMALIZE_ROW {k} {pivotValue}");
-        string response1 = await readers[w].ReadLineAsync();
-        
-        // Обновляем элемент b[k] у воркера
-        await writers[w].WriteLineAsync($"UPDATE_B_ELEMENT {k} {b_local[k]}");
-        string response2 = await readers[w].ReadLineAsync();
-        
-        if (response1 != "OK") throw new Exception($"Worker {w} ошибка NORMALIZE_ROW: {response1}");
-        if (response2 != "OK") throw new Exception($"Worker {w} ошибка UPDATE_B_ELEMENT: {response2}");
-    }
+        var normalizeTasks = new List<Task<(string, string)>>();
+        for (int w = 0; w < p; w++)
+        {
+            int worker = w; // capture
+            
+            normalizeTasks.Add(Task.Run(async () =>
+            {
+                await _locks[worker].WaitAsync();
+                try
+                {
+                    // Отправляем обе команды подряд для минимизации блокировок
+                    await writers[worker].WriteLineAsync($"NORMALIZE_ROW {k} {pivotValue}");
+                    await writers[worker].WriteLineAsync($"UPDATE_B_ELEMENT {k} {b_local[k]}");
+                    
+                    // Читаем оба ответа
+                    string response1 = await readers[worker].ReadLineAsync();
+                    string response2 = await readers[worker].ReadLineAsync();
+                    
+                    return (response1, response2);
+                }
+                finally
+                {
+                    _locks[worker].Release();
+                }
+            }));
+        }
+
+        var normalizeResults = await Task.WhenAll(normalizeTasks);
+        for (int w = 0; w < p; w++)
+        {
+            if (normalizeResults[w].Item1 != "OK") 
+                throw new Exception($"Worker {w} ошибка NORMALIZE_ROW: {normalizeResults[w].Item1}");
+            if (normalizeResults[w].Item2 != "OK")
+                throw new Exception($"Worker {w} ошибка UPDATE_B_ELEMENT: {normalizeResults[w].Item2}");
+        }
 
     // 6.4. Исключение элементов ниже диагонали
     // Сначала вычисляем все multipliers для строк i > k
@@ -309,32 +450,48 @@ for (int k = 0; k < n - 1; k++)
     // Каждый воркер должен обновить ВСЕ свои столбцы для ВСЕХ строк i > k
     
     // Разделяем операции по воркерам для эффективности
-    for (int w = 0; w < p; w++)
+var eliminateTasks = new List<Task<string>>();
+for (int w = 0; w < p; w++)
+{
+    int worker = w; // capture
+    
+    eliminateTasks.Add(Task.Run(async () =>
     {
         // Подготавливаем операции для этого воркера
-        var operations = new List<string>();
+        var operations = new StringBuilder();
         for (int i = k + 1; i < n; i++)
         {
-            operations.Add($"{i} {multipliers[i]}");
+            operations.AppendLine($"{i} {multipliers[i]}");
         }
         
-        if (operations.Count > 0)
+        if (operations.Length > 0)
         {
-            await writers[w].WriteLineAsync($"ELIMINATE_BATCH {k} {operations.Count}");
-            foreach (var op in operations)
-                await writers[w].WriteLineAsync(op);
-            await writers[w].WriteLineAsync("END_BATCH");
-            
-            if (await readers[w].ReadLineAsync() != "OK")
-                throw new Exception($"Worker {w} ошибка ELIMINATE_BATCH");
+            await _locks[worker].WaitAsync();
+            try
+            {
+                // Отправляем всё одним запросом
+                await writers[worker].WriteLineAsync($"ELIMINATE_BATCH {k} {n - k - 1}");
+                await writers[worker].WriteAsync(operations.ToString());
+                await writers[worker].WriteLineAsync("END_BATCH");
+                await writers[worker].FlushAsync();
+                
+                return await readers[worker].ReadLineAsync();
+            }
+            finally
+            {
+                _locks[worker].Release();
+            }
         }
-        
-        // Логируем прогресс для больших матриц
-        if (n > 1000 && k % 100 == 0 && w == 0)
-        {
-            Console.WriteLine($"[Контроллер] Шаг {k}: отправлено {operations.Count} операций воркеру {w}");
-        }
-    }
+        return "OK"; // Нет операций - нет ошибок
+    }));
+}
+
+var eliminateResults = await Task.WhenAll(eliminateTasks);
+for (int w = 0; w < p; w++)
+{
+    if (eliminateResults[w] != "OK")
+        throw new Exception($"Worker {w} ошибка ELIMINATE_BATCH: {eliminateResults[w]}");
+}
     
     // Логируем прогресс
     if (k % 100 == 0 || k == n - 2)
@@ -374,45 +531,121 @@ Console.WriteLine($"[Контроллер] Прямой ход завершен"
 
     // 7. После прямого хода все воркеры должны иметь верхнюю треугольную матрицу
     // Получаем диагональные элементы для обратного хода
-    var diag = new double[n];
-    for (int k = 0; k < n; k++)
-    {
-        int workerIdx = k % p;
-        await writers[workerIdx].WriteLineAsync($"GET_ELEMENT {k} {k}");
-        string elem = await readers[workerIdx].ReadLineAsync();
-        diag[k] = double.Parse(elem);
-    }
+var diag = new double[n];
+var diagTasks = new List<Task<(int, double)>>();
 
+for (int k = 0; k < n; k++)
+{
+    int row = k; // capture
+    int workerIdx = row % p;
+    
+    diagTasks.Add(Task.Run(async () =>
+    {
+        await _locks[workerIdx].WaitAsync();
+        try
+        {
+            await writers[workerIdx].WriteLineAsync($"GET_ELEMENT {row} {row}");
+            string elem = await readers[workerIdx].ReadLineAsync();
+            return (row, double.Parse(elem));
+        }
+        finally
+        {
+            _locks[workerIdx].Release();
+        }
+    }));
+    
+    // Батчинг для больших матриц
+    if (diagTasks.Count >= 100)
+    {
+        var results = await Task.WhenAll(diagTasks);
+        foreach (var (index, value) in results)
+            diag[index] = value;
+        diagTasks.Clear();
+    }
+}
+
+// Оставшиеся задачи
+if (diagTasks.Count > 0)
+{
+    var results = await Task.WhenAll(diagTasks);
+    foreach (var (index, value) in results)
+        diag[index] = value;
+}
     // 8. Обратный ход
     Console.WriteLine($"[Контроллер] Выполнение обратного хода...");
     solution = new double[n];
     
-    // Сначала выполняем обратный ход для верхней треугольной матрицы
-    for (int i = n - 1; i >= 0; i--)
+for (int i = n - 1; i >= 0; i--)
+{
+    solution[i] = b_local[i];
+    
+    // Параллельно получаем все элементы строки i
+    var rowTasks = new List<Task<(int, double)>>();
+    for (int j = i + 1; j < n; j++)
     {
-        solution[i] = b_local[i];
+        int column = j; // capture
+        int workerIdx = column % p;
         
-        // Для каждого j > i нужно вычислить сумму A[i,j]*x[j]
-        // A[i,j] распределены по разным воркерам
-        for (int j = i + 1; j < n; j++)
+        rowTasks.Add(Task.Run(async () =>
         {
-            int workerIdx = j % p;
-            await writers[workerIdx].WriteLineAsync($"GET_ELEMENT {i} {j}");
-            string elem = await readers[workerIdx].ReadLineAsync();
-            double a_ij = double.Parse(elem);
+            await _locks[workerIdx].WaitAsync();
+            try
+            {
+                await writers[workerIdx].WriteLineAsync($"GET_ELEMENT {i} {column}");
+                string elem = await readers[workerIdx].ReadLineAsync();
+                return (column, double.Parse(elem));
+            }
+            finally
+            {
+                _locks[workerIdx].Release();
+            }
+        }));
+    }
+    
+    // Обрабатываем батчами по 50 элементов
+    var batchSize = 50;
+    for (int batchStart = 0; batchStart < rowTasks.Count; batchStart += batchSize)
+    {
+        int batchEnd = Math.Min(batchStart + batchSize, rowTasks.Count);
+        var batchTasks = rowTasks.GetRange(batchStart, batchEnd - batchStart);
+        
+        var batchResults = await Task.WhenAll(batchTasks);
+        foreach (var (j, a_ij) in batchResults)
+        {
             solution[i] -= a_ij * solution[j];
         }
-        
-        solution[i] /= diag[i];
     }
+    
+    solution[i] /= diag[i];
+    
+    // Прогресс для больших матриц
+    if (i % 100 == 0)
+        Console.WriteLine($"[Контроллер] Обратный ход: обработано {n - i}/{n}");
+}
 
 
                 // 9. Завершаем worker'ов
                 Console.WriteLine($"[Контроллер] Завершение работы узлов...");
-                for (int i = 0; i < p; i++)
-                {
-                    await writers[i].WriteLineAsync("DONE");
-                }
+var doneTasks = new List<Task>();
+for (int i = 0; i < p; i++)
+{
+    int worker = i; // capture
+    
+    doneTasks.Add(Task.Run(async () =>
+    {
+        await _locks[worker].WaitAsync();
+        try
+        {
+            await writers[worker].WriteLineAsync("DONE");
+        }
+        finally
+        {
+            _locks[worker].Release();
+        }
+    }));
+}
+
+await Task.WhenAll(doneTasks);
 
                 sw.Stop();
                 
@@ -440,6 +673,7 @@ Console.WriteLine($"[Контроллер] Прямой ход завершен"
                 // Очистка ресурсов
                 for (int i = 0; i < p; i++)
                 {
+                    _locks[i]?.Dispose();
                     writers[i]?.Dispose();
                     readers[i]?.Dispose();
                     clients[i]?.Close();
