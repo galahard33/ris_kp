@@ -220,106 +220,157 @@ namespace GaussWebApp.Controllers
                         throw new Exception($"Worker {i} не готов: {response}");
                 }
 
-                // 6. Прямой ход метода Гаусса
-                Console.WriteLine($"[Контроллер] Начало прямого хода...");
-    var b_local = (double[])loadedB.Clone();
+               Console.WriteLine($"[Контроллер] Начало прямого хода...");
+var b_local = (double[])loadedB.Clone();
+var localColumnK = new double[n]; // Храним столбец k локально для всех воркеров
+
+for (int k = 0; k < n - 1; k++)
+{
+    // 6.1. Выбор главного элемента
+    int workerWithColK = k % p;
     
-    for (int k = 0; k < n - 1; k++)
+    await writers[workerWithColK].WriteLineAsync($"GET_COLUMN {k}");
+    
+    string response = await readers[workerWithColK].ReadLineAsync();
+    if (!response.StartsWith($"COLUMN {k}"))
+        throw new Exception($"Ошибка получения столбца {k}: {response}");
+        
+    for (int i = 0; i < n; i++)
+        localColumnK[i] = double.Parse(await readers[workerWithColK].ReadLineAsync() ?? "0");
+
+    // Находим строку с максимальным элементом в столбце k
+    int pivot = k;
+    for (int i = k + 1; i < n; i++)
+        if (Math.Abs(localColumnK[i]) > Math.Abs(localColumnK[pivot]))
+            pivot = i;
+
+    // 6.2. Обмен строками если нужно
+    if (pivot != k)
     {
-        // 6.1. Выбор главного элемента
-        int workerWithColK = k % p;
+        Console.WriteLine($"[Контроллер] Обмен строк {k}<->{pivot} (макс элемент: {Math.Abs(localColumnK[pivot]):E6})");
         
-        await writers[workerWithColK].WriteLineAsync($"GET_COLUMN {k}");
-        
-        var columnK = new double[n];
-        string response = await readers[workerWithColK].ReadLineAsync();
-        if (!response.StartsWith($"COLUMN {k}"))
-            throw new Exception($"Ошибка получения столбца {k}");
-            
-        for (int i = 0; i < n; i++)
-            columnK[i] = double.Parse(await readers[workerWithColK].ReadLineAsync() ?? "0");
-
-        // Находим строку с максимальным элементом в столбце k
-        int pivot = k;
-        for (int i = k + 1; i < n; i++)
-            if (Math.Abs(columnK[i]) > Math.Abs(columnK[pivot]))
-                pivot = i;
-
-        // 6.2. Обмен строками если нужно
-        if (pivot != k)
-        {
-            for (int w = 0; w < p; w++)
-            {
-                await writers[w].WriteLineAsync($"SWAP_ROWS {k} {pivot}");
-                if (await readers[w].ReadLineAsync() != "OK")
-                    throw new Exception($"Worker {w} ошибка SWAP_ROWS");
-            }
-            
-            (b_local[k], b_local[pivot]) = (b_local[pivot], b_local[k]);
-            
-            // Нужно обновить columnK после обмена строк
-            await writers[workerWithColK].WriteLineAsync($"GET_COLUMN {k}");
-            response = await readers[workerWithColK].ReadLineAsync();
-            for (int i = 0; i < n; i++)
-                columnK[i] = double.Parse(await readers[workerWithColK].ReadLineAsync() ?? "0");
-        }
-
-        // 6.3. Нормализация - делим строку k на A[k,k]
-        double pivotValue = columnK[k];
-        if (Math.Abs(pivotValue) < 1e-12)
-            throw new Exception($"Матрица вырожденна на шаге {k}");
-        
-        // Обновляем строку k в векторе b
-        b_local[k] /= pivotValue;
-        
-        // Отправляем команду на нормализацию строки k всем воркерам
         for (int w = 0; w < p; w++)
         {
-            await writers[w].WriteLineAsync($"NORMALIZE_ROW {k} {pivotValue}");
+            await writers[w].WriteLineAsync($"SWAP_ROWS {k} {pivot}");
             if (await readers[w].ReadLineAsync() != "OK")
-                throw new Exception($"Worker {w} ошибка NORMALIZE_ROW");
-        }
-
-        // 6.4. Исключение элементов ниже диагонали
-        // Нужно собрать все операции исключения и отправить пакетом каждому воркеру
-        for (int w = 0; w < p; w++)
-        {
-            // Для каждого воркера собираем только те строки, которые ему нужны
-            // (те, у которых соответствующие столбцы хранятся на этом воркере)
-            var operations = new List<string>();
-            
-            for (int i = k + 1; i < n; i++)
-            {
-                // Вычисляем множитель для строки i
-                // Для этого нужно получить элемент A[i, k] у воркера, который хранит столбец k
-                if (w == workerWithColK)
-                {
-                    // Этот воркер хранит столбец k, поэтому у него есть A[i, k]
-                    double factor = columnK[i]; // Это A[i, k] после обмена строк
-                    operations.Add($"{i} {factor}");
-                }
-            }
-            
-            if (operations.Count > 0)
-            {
-                await writers[w].WriteLineAsync($"ELIMINATE_BATCH {k} {operations.Count}");
-                foreach (var op in operations)
-                    await writers[w].WriteLineAsync(op);
-                await writers[w].WriteLineAsync("END_BATCH");
-                
-                if (await readers[w].ReadLineAsync() != "OK")
-                    throw new Exception($"Worker {w} ошибка ELIMINATE_BATCH");
-            }
+                throw new Exception($"Worker {w} ошибка SWAP_ROWS");
         }
         
-        // Обновляем b_local для строк ниже k
+        // Обмен в локальном векторе b
+        (b_local[k], b_local[pivot]) = (b_local[pivot], b_local[k]);
+        
+        // Обновляем localColumnK после обмена строк
+        await writers[workerWithColK].WriteLineAsync($"GET_COLUMN {k}");
+        response = await readers[workerWithColK].ReadLineAsync();
+        for (int i = 0; i < n; i++)
+            localColumnK[i] = double.Parse(await readers[workerWithColK].ReadLineAsync() ?? "0");
+    }
+
+    // 6.3. Нормализация строки k
+    double pivotValue = localColumnK[k];
+    if (Math.Abs(pivotValue) < 1e-12)
+        throw new Exception($"Матрица вырожденна на шаге {k} (pivot={pivotValue:E6})");
+    
+    Console.WriteLine($"[Контроллер] Шаг {k}: делим строку {k} на {pivotValue:E6}");
+    
+    // Сначала обновляем локальный вектор b
+    b_local[k] /= pivotValue;
+    
+    // Отправляем команды на нормализацию всем воркерам
+    for (int w = 0; w < p; w++)
+    {
+        // Нормализуем строку k в матрице A
+        await writers[w].WriteLineAsync($"NORMALIZE_ROW {k} {pivotValue}");
+        string response1 = await readers[w].ReadLineAsync();
+        
+        // Обновляем элемент b[k] у воркера
+        await writers[w].WriteLineAsync($"UPDATE_B_ELEMENT {k} {b_local[k]}");
+        string response2 = await readers[w].ReadLineAsync();
+        
+        if (response1 != "OK") throw new Exception($"Worker {w} ошибка NORMALIZE_ROW: {response1}");
+        if (response2 != "OK") throw new Exception($"Worker {w} ошибка UPDATE_B_ELEMENT: {response2}");
+    }
+
+    // 6.4. Исключение элементов ниже диагонали
+    // Сначала вычисляем все multipliers для строк i > k
+    var multipliers = new Dictionary<int, double>();
+    for (int i = k + 1; i < n; i++)
+    {
+        multipliers[i] = localColumnK[i]; // factor = A[i,k]
+    }
+    
+    // Обновляем локальный вектор b для всех строк i > k
+    for (int i = k + 1; i < n; i++)
+    {
+        b_local[i] -= multipliers[i] * b_local[k];
+    }
+    
+    // Теперь отправляем операции исключения для матрицы A каждому воркеру
+    // Каждый воркер должен обновить ВСЕ свои столбцы для ВСЕХ строк i > k
+    
+    // Разделяем операции по воркерам для эффективности
+    for (int w = 0; w < p; w++)
+    {
+        // Подготавливаем операции для этого воркера
+        var operations = new List<string>();
         for (int i = k + 1; i < n; i++)
         {
-            // Для этого нужно получить A[i, k] - должен быть сохранен где-то
-            double factor = columnK[i];
-            b_local[i] -= factor * b_local[k];
+            operations.Add($"{i} {multipliers[i]}");
+        }
+        
+        if (operations.Count > 0)
+        {
+            await writers[w].WriteLineAsync($"ELIMINATE_BATCH {k} {operations.Count}");
+            foreach (var op in operations)
+                await writers[w].WriteLineAsync(op);
+            await writers[w].WriteLineAsync("END_BATCH");
+            
+            if (await readers[w].ReadLineAsync() != "OK")
+                throw new Exception($"Worker {w} ошибка ELIMINATE_BATCH");
+        }
+        
+        // Логируем прогресс для больших матриц
+        if (n > 1000 && k % 100 == 0 && w == 0)
+        {
+            Console.WriteLine($"[Контроллер] Шаг {k}: отправлено {operations.Count} операций воркеру {w}");
         }
     }
+    
+    // Логируем прогресс
+    if (k % 100 == 0 || k == n - 2)
+    {
+        Console.WriteLine($"[Контроллер] Выполнен шаг {k+1}/{n-1} ({(k+1)*100.0/(n-1):F1}%)");
+    }
+}
+
+// 6.5. Нормализация последней диагонали (строки n-1)
+int lastRow = n - 1;
+int lastWorker = lastRow % p;
+
+// Получаем последний диагональный элемент
+await writers[lastWorker].WriteLineAsync($"GET_ELEMENT {lastRow} {lastRow}");
+string lastDiagStr = await readers[lastWorker].ReadLineAsync();
+double lastDiag = double.Parse(lastDiagStr);
+
+if (Math.Abs(lastDiag) < 1e-12)
+    throw new Exception($"Матрица вырожденна в последней строке (диагональ={lastDiag:E6})");
+
+// Нормализуем последнюю строку
+b_local[lastRow] /= lastDiag;
+
+for (int w = 0; w < p; w++)
+{
+    await writers[w].WriteLineAsync($"NORMALIZE_ROW {lastRow} {lastDiag}");
+    string response1 = await readers[w].ReadLineAsync();
+    
+    await writers[w].WriteLineAsync($"UPDATE_B_ELEMENT {lastRow} {b_local[lastRow]}");
+    string response2 = await readers[w].ReadLineAsync();
+    
+    if (response1 != "OK") throw new Exception($"Worker {w} ошибка NORMALIZE_ROW для последней строки");
+    if (response2 != "OK") throw new Exception($"Worker {w} ошибка UPDATE_B_ELEMENT для последней строки");
+}
+
+Console.WriteLine($"[Контроллер] Прямой ход завершен");
 
     // 7. После прямого хода все воркеры должны иметь верхнюю треугольную матрицу
     // Получаем диагональные элементы для обратного хода
