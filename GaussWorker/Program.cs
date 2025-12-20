@@ -5,7 +5,6 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
-using System.Linq;
 
 namespace GaussWorker;
 
@@ -28,7 +27,7 @@ class Program
 
         var listener = new TcpListener(IPAddress.Any, port);
         listener.Start();
-        Console.WriteLine($"[Worker {port}] Слушаю порт {port} (оптимизированная версия)");
+        Console.WriteLine($"[Worker {port}] Слушаю порт {port}");
 
         while (true)
         {
@@ -46,113 +45,126 @@ class Program
 
     static async Task HandleClientAsync(TcpClient client, int port)
     {
-        // Используем массив вместо Dictionary для быстрого доступа по индексу
-        double[][] localColumns = null;
+        Dictionary<int, double[]> localColumns = new();
         double[] b = null;
         int n = 0;
-        
-        // Кэш для часто запрашиваемых столбцов
-        var columnCache = new Dictionary<int, double[]>();
-        // Кэш для часто запрашиваемых элементов
-        var elementCache = new Dictionary<(int, int), double>();
 
         try
         {
             using (client)
+            using (var stream = client.GetStream())
+            using (var reader = new StreamReader(stream, Encoding.UTF8))
+            using (var writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true })
             {
-                // Устанавливаем таймауты для избежания зависаний
-                client.ReceiveTimeout = 30000;
-                client.SendTimeout = 30000;
-                
-                var stream = client.GetStream();
-                // Увеличиваем буфер для пакетной обработки
-                stream.ReadTimeout = 5000;
-                
-                using (var reader = new StreamReader(stream, Encoding.UTF8, false, 8192))
-                using (var writer = new StreamWriter(stream, Encoding.UTF8, 8192) { AutoFlush = true })
+                Console.WriteLine($"[Worker {port}] Подключение установлено");
+
+                string line;
+                while ((line = await reader.ReadLineAsync()) != null)
                 {
-                    Console.WriteLine($"[Worker {port}] Подключение установлено");
-
-                    // Буфер для пакетного чтения
-                    var buffer = new StringBuilder();
-                    string line;
-                    
-                    while ((line = await reader.ReadLineAsync()) != null)
+                    try
                     {
-                        try
+                        if (line.StartsWith("INIT"))
                         {
-                            if (line.StartsWith("INIT"))
+                            var parts = line.Split(' ');
+                            if (parts.Length != 2)
                             {
-                                var parts = line.Split(' ');
-                                if (parts.Length != 2)
-                                {
-                                    await writer.WriteLineAsync("ERROR: Неверный формат INIT");
-                                    continue;
-                                }
+                                await writer.WriteLineAsync("ERROR: Неверный формат INIT");
+                                continue;
+                            }
 
-                                n = int.Parse(parts[1]);
-                                localColumns = new double[n][]; // Массив для быстрого доступа
-                                b = new double[n];
-                                columnCache.Clear();
-                                elementCache.Clear();
-                                
-                                await writer.WriteLineAsync("READY");
-                                Console.WriteLine($"[Worker {port}] Инициализирован с n={n}");
-                            }
-                            else if (line.StartsWith("COL"))
+                            n = int.Parse(parts[1]);
+                            localColumns.Clear();
+                            b = null;
+                            await writer.WriteLineAsync("READY");
+                            Console.WriteLine($"[Worker {port}] Инициализирован с n={n}");
+                        }
+                        else if (line.StartsWith("COL"))
+                        {
+                            var parts = line.Split(' ');
+                            if (parts.Length != 2)
                             {
-                                var parts = line.Split(' ');
-                                if (parts.Length != 2)
-                                {
-                                    await writer.WriteLineAsync("ERROR: Неверный формат COL");
-                                    continue;
-                                }
+                                await writer.WriteLineAsync("ERROR: Неверный формат COL");
+                                continue;
+                            }
 
-                                int j = int.Parse(parts[1]);
-                                var col = new double[n];
-                                
-                                // Читаем столбец пакетом - оптимизация для больших n
-                                for (int i = 0; i < n; i++)
-                                {
-                                    string valueLine = await reader.ReadLineAsync();
-                                    if (valueLine == null)
-                                    {
-                                        await writer.WriteLineAsync($"ERROR: Недостаточно данных для столбца {j}");
-                                        break;
-                                    }
-                                    col[i] = double.Parse(valueLine);
-                                }
-                                
-                                localColumns[j] = col;
-                                // Добавляем в кэш
-                                columnCache[j] = col;
-                                
-                                Console.WriteLine($"[Worker {port}] Получен столбец {j}");
-                            }
-                            else if (line == "VECTOR_B")
+                            int j = int.Parse(parts[1]);
+                            var col = new double[n];
+                            for (int i = 0; i < n; i++)
                             {
-                                // Оптимизированное чтение вектора
-                                for (int i = 0; i < n; i++)
+                                string valueLine = await reader.ReadLineAsync();
+                                if (valueLine == null)
                                 {
-                                    string valueLine = await reader.ReadLineAsync();
-                                    if (valueLine == null)
-                                    {
-                                        await writer.WriteLineAsync($"ERROR: Недостаточно данных для вектора b");
-                                        b = null;
-                                        break;
-                                    }
-                                    b[i] = double.Parse(valueLine);
+                                    await writer.WriteLineAsync($"ERROR: Недостаточно данных для столбца {j}");
+                                    break;
                                 }
-                                Console.WriteLine($"[Worker {port}] Получен вектор b (длина: {n})");
+                                col[i] = double.Parse(valueLine);
                             }
-                            else if (line.StartsWith("GET_COLUMN"))
+                            localColumns[j] = col;
+                            Console.WriteLine($"[Worker {port}] Получен столбец {j}");
+                        }
+                        else if (line == "VECTOR_B")
+                        {
+                            b = new double[n];
+                            for (int i = 0; i < n; i++)
                             {
-                                var parts = line.Split(' ');
-                                if (parts.Length != 2)
+                                string valueLine = await reader.ReadLineAsync();
+                                if (valueLine == null)
                                 {
-                                    await writer.WriteLineAsync("ERROR: Неверный формат GET_COLUMN");
-                                    continue;
+                                    await writer.WriteLineAsync($"ERROR: Недостаточно данных для вектора b");
+                                    b = null;
+                                    break;
                                 }
+                                b[i] = double.Parse(valueLine);
+                            }
+                            Console.WriteLine($"[Worker {port}] Получен вектор b (длина: {n})");
+                        }
+                        else if (line.StartsWith("GET_COLUMN"))
+                        {
+                            var parts = line.Split(' ');
+                            if (parts.Length != 2)
+                            {
+                                await writer.WriteLineAsync("ERROR: Неверный формат GET_COLUMN");
+                                continue;
+                            }
+
+                            int colIndex = int.Parse(parts[1]);
+                            if (localColumns.TryGetValue(colIndex, out var column))
+                            {
+                                await writer.WriteLineAsync($"COLUMN {colIndex}");
+                                for (int i = 0; i < n; i++)
+                                    await writer.WriteLineAsync(column[i].ToString("R"));
+                            }
+                            else
+                            {
+                                await writer.WriteLineAsync($"ERROR: Столбец {colIndex} не найден");
+                            }
+                        }
+                        else if (line.StartsWith("SWAP_ROWS"))
+                        {
+                            var parts = line.Split(' ');
+                            if (parts.Length != 3)
+                            {
+                                await writer.WriteLineAsync("ERROR: Неверный формат SWAP_ROWS");
+                                continue;
+                            }
+
+                            int row1 = int.Parse(parts[1]);
+                            int row2 = int.Parse(parts[2]);
+
+                            // Обмен в столбцах
+                            foreach (var col in localColumns.Values)
+                            {
+                                if (row1 < col.Length && row2 < col.Length)
+                                {
+                                    (col[row1], col[row2]) = (col[row2], col[row1]);
+                                }
+                            }
+
+                            // Обмен в векторе b
+                            if (b != null && row1 < b.Length && row2 < b.Length)
+                            {
+                                (b[row1], b[row2]) = (b[row2], b[row1]);
+                            }
 
                             await writer.WriteLineAsync("OK");
                             Console.WriteLine($"[Worker {port}] Выполнен обмен строк {row1}<->{row2}");
@@ -236,204 +248,75 @@ class Program
                         else if (line.StartsWith("NORMALIZE_ROW"))
                             {
                                 var parts = line.Split(' ');
-                                if (parts.Length != 3)
-                                {
-                                    await writer.WriteLineAsync("ERROR: Неверный формат NORMALIZE_ROW");
-                                    continue;
-                                }
-                                
                                 int row = int.Parse(parts[1]);
                                 double divisor = double.Parse(parts[2]);
                                 
-                                if (Math.Abs(divisor) < 1e-12)
+                                // Делим строку row на всех столбцах
+                                foreach (var col in localColumns.Values)
                                 {
-                                    await writer.WriteLineAsync("ERROR: Деление на ноль");
-                                    continue;
-                                }
-                                
-                                // Быстрое деление строки
-                                for (int colIdx = 0; colIdx < n; colIdx++)
-                                {
-                                    var col = localColumns[colIdx];
-                                    if (col != null && row < n)
+                                    if (row < col.Length)
                                     {
                                         col[row] /= divisor;
                                     }
                                 }
                                 
-                                // Обновляем элемент в векторе b
-                                if (row < n)
-                                {
-                                    b[row] /= divisor;
-                                }
-                                
-                                // Очищаем кэш элементов этой строки
-                                var keysToRemove = elementCache.Keys.Where(key => key.Item1 == row).ToList();
-                                foreach (var key in keysToRemove) elementCache.Remove(key);
-                                
                                 await writer.WriteLineAsync("OK");
-                                // Console.WriteLine($"[Worker {port}] Нормализована строка {row}");
                             }
                             else if (line.StartsWith("GET_ELEMENT"))
-                            {
-                                var parts = line.Split(' ');
-                                if (parts.Length != 3)
                                 {
-                                    await writer.WriteLineAsync("ERROR: Неверный формат GET_ELEMENT");
-                                    continue;
-                                }
-                                
-                                int row = int.Parse(parts[1]);
-                                int colIndex = int.Parse(parts[2]);
-                                
-                                // Проверяем кэш элементов
-                                var cacheKey = (row, colIndex);
-                                if (!elementCache.TryGetValue(cacheKey, out double value))
-                                {
-                                    var column = localColumns[colIndex];
-                                    if (column != null && row < column.Length)
+                                    var parts = line.Split(' ');
+                                    int row = int.Parse(parts[1]);
+                                    int colIndex = int.Parse(parts[2]);
+                                    
+                                    if (localColumns.TryGetValue(colIndex, out var column) && row < column.Length)
                                     {
-                                        value = column[row];
+                                        await writer.WriteLineAsync(column[row].ToString("R"));
                                     }
                                     else
                                     {
-                                        value = 0;
-                                    }
-                                    elementCache[cacheKey] = value;
-                                }
-                                
-                                await writer.WriteLineAsync(value.ToString("R"));
-                            }
-                            else if (line == "GET_MULTIPLE_ELEMENTS")
-                            {
-                                // Новый протокол: получение нескольких элементов за один запрос
-                                // Формат после команды: количество_элементов
-                                // затем для каждого элемента: строка столбец
-                                
-                                string countLine = await reader.ReadLineAsync();
-                                if (countLine == null || !int.TryParse(countLine, out int elementCount))
-                                {
-                                    await writer.WriteLineAsync("ERROR: Неверный формат GET_MULTIPLE_ELEMENTS");
-                                    continue;
-                                }
-                                
-                                // Используем StringBuilder для эффективной отправки
-                                var resultBuilder = new StringBuilder();
-                                
-                                for (int elem = 0; elem < elementCount; elem++)
-                                {
-                                    string coordsLine = await reader.ReadLineAsync();
-                                    if (coordsLine == null)
-                                    {
-                                        resultBuilder.AppendLine("0");
-                                        continue;
-                                    }
-                                    
-                                    var coords = coordsLine.Split(' ');
-                                    if (coords.Length != 2)
-                                    {
-                                        resultBuilder.AppendLine("0");
-                                        continue;
-                                    }
-                                    
-                                    int row = int.Parse(coords[0]);
-                                    int colIndex = int.Parse(coords[1]);
-                                    
-                                    // Проверяем кэш
-                                    var cacheKey = (row, colIndex);
-                                    if (!elementCache.TryGetValue(cacheKey, out double value))
-                                    {
-                                        var column = localColumns[colIndex];
-                                        if (column != null && row < column.Length)
-                                        {
-                                            value = column[row];
-                                        }
-                                        else
-                                        {
-                                            value = 0;
-                                        }
-                                        elementCache[cacheKey] = value;
-                                    }
-                                    
-                                    resultBuilder.AppendLine(value.ToString("R"));
-                                }
-                                
-                                await writer.WriteAsync(resultBuilder.ToString());
-                                // Console.WriteLine($"[Worker {port}] Отправлено {elementCount} элементов");
-                            }
-                            else if (line == "GET_MATRIX")
-                            {
-                                // Отправляем все столбцы, которые храним
-                                var matrixBuilder = new StringBuilder();
-                                int columnCount = 0;
-                                
-                                for (int colIdx = 0; colIdx < n; colIdx++)
-                                {
-                                    var column = localColumns[colIdx];
-                                    if (column != null)
-                                    {
-                                        matrixBuilder.AppendLine($"COL {colIdx}");
-                                        for (int row = 0; row < n; row++)
-                                        {
-                                            matrixBuilder.AppendLine(column[row].ToString("R"));
-                                        }
-                                        columnCount++;
+                                        await writer.WriteLineAsync("0");
                                     }
                                 }
-                                
-                                matrixBuilder.AppendLine("END_MATRIX");
-                                await writer.WriteAsync(matrixBuilder.ToString());
-                                
-                                Console.WriteLine($"[Worker {port}] Отправлена матрица ({columnCount} столбцов)");
-                            }
-                            else if (line == "DONE")
-                            {
-                                Console.WriteLine($"[Worker {port}] Работа завершена");
-                                await writer.WriteLineAsync("BYE");
-                                
-                                // Освобождаем память
-                                localColumns = null;
-                                b = null;
-                                columnCache.Clear();
-                                elementCache.Clear();
-                                
-                                GC.Collect(); // Принудительный сбор мусора
-                                break;
-                            }
-                            else if (line == "PING")
-                            {
-                                // Простая команда для проверки соединения
-                                await writer.WriteLineAsync("PONG");
-                            }
-                            else if (line == "STATUS")
-                            {
-                                // Отправляем статистику по памяти
-                                int storedColumns = 0;
-                                if (localColumns != null)
-                                {
-                                    storedColumns = localColumns.Count(col => col != null);
-                                }
-                                
-                                await writer.WriteLineAsync($"STATUS: n={n}, columns={storedColumns}, cache_size={elementCache.Count}");
-                            }
-                            else
-                            {
-                                Console.WriteLine($"[Worker {port}] Неизвестная команда: '{line}'");
-                                await writer.WriteLineAsync($"ERROR: Неизвестная команда: {line}");
-                            }
-                        }
-                        catch (Exception ex)
+                        else if (line == "GET_MATRIX")
                         {
-                            Console.WriteLine($"[Worker {port}] Ошибка при обработке команды '{line}': {ex.Message}");
-                            await writer.WriteLineAsync($"ERROR: {ex.Message}");
+                            // Отправляем все столбцы, которые храним
+                            foreach (var kvp in localColumns)
+                            {
+                                await writer.WriteLineAsync($"COL {kvp.Key}");
+                                for (int row = 0; row < n; row++)
+                                {
+                                    if (row < kvp.Value.Length)
+                                    {
+                                        await writer.WriteLineAsync(kvp.Value[row].ToString("R"));
+                                    }
+                                    else
+                                    {
+                                        await writer.WriteLineAsync("0");
+                                    }
+                                }
+                            }
+                            await writer.WriteLineAsync("END_MATRIX");
+                            Console.WriteLine($"[Worker {port}] Отправлена матрица ({localColumns.Count} столбцов)");
                         }
+                        else if (line == "DONE")
+                        {
+                            Console.WriteLine($"[Worker {port}] Работа завершена");
+                            await writer.WriteLineAsync("BYE");
+                            break;
+                        }
+                        else
+                        {
+                            Console.WriteLine($"[Worker {port}] Неизвестная команда: '{line}'");
+                            await writer.WriteLineAsync($"ERROR: Неизвестная команда: {line}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[Worker {port}] Ошибка при обработке команды '{line}': {ex.Message}");
+                        await writer.WriteLineAsync($"ERROR: {ex.Message}");
                     }
                 }
             }
-        }
-        catch (IOException ioEx) when (ioEx.InnerException is SocketException sockEx && sockEx.SocketErrorCode == SocketError.TimedOut)
-        {
-            Console.WriteLine($"[Worker {port}] Таймаут соединения");
         }
         catch (Exception ex)
         {
