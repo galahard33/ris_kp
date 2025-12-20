@@ -129,44 +129,162 @@ namespace GaussWebApp.Controllers
             return (x2, sw.Elapsed.TotalSeconds);
         }
 
-        private async Task<(double[] solution, double time, int nodeCount, string nodeInfo)> 
-            SolveDistributedAsync(double[,] loadedA, double[] loadedB)
+private async Task<(double[] solution, double time, int nodeCount, string nodeInfo)> 
+    SolveDistributedAsync(double[,] loadedA, double[] loadedB)
+{
+    if (!System.IO.File.Exists("nodes.txt"))
+    {
+        throw new FileNotFoundException("Файл nodes.txt не найден.");
+    }
+
+    var lines = await System.IO.File.ReadAllLinesAsync("nodes.txt");
+    var nodes = new List<(string Host, int Port)>();
+    
+    foreach (var line in lines)
+    {
+        if (string.IsNullOrWhiteSpace(line) || line.Trim().StartsWith("#")) 
+            continue;
+            
+        var parts = line.Split(':');
+        if (parts.Length == 2 && int.TryParse(parts[1], out int port))
         {
-            if (!System.IO.File.Exists("nodes.txt"))
-            {
-                throw new FileNotFoundException("Файл nodes.txt не найден.");
-            }
+            nodes.Add((parts[0].Trim(), port));
+        }
+    }
 
-            var lines = await System.IO.File.ReadAllLinesAsync("nodes.txt");
-            var nodes = new List<(string Host, int Port)>();
-            
-            foreach (var line in lines)
+    if (nodes.Count == 0)
+    {
+        throw new InvalidOperationException("Файл nodes.txt не содержит корректных узлов.");
+    }
+
+    var nodeCount = nodes.Count;
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    
+    int n = loadedB.Length;
+    int p = nodes.Count;
+
+    // Подключение к worker'ам
+    var clients = new TcpClient[p];
+    var writers = new StreamWriter[p];
+    var readers = new StreamReader[p];
+    
+    double[] solution = null;
+
+    try
+    {
+        // 1. Параллельное подключение
+        Console.WriteLine($"[Контроллер] Подключение к {p} узлам...");
+        var connectTasks = new Task[p];
+        for (int i = 0; i < p; i++)
+        {
+            int idx = i;
+            connectTasks[i] = Task.Run(async () =>
             {
-                if (string.IsNullOrWhiteSpace(line) || line.Trim().StartsWith("#")) 
-                    continue;
-                    
-                var parts = line.Split(':');
-                if (parts.Length == 2 && int.TryParse(parts[1], out int port))
+                clients[idx] = new TcpClient();
+                clients[idx].ReceiveTimeout = 30000;
+                clients[idx].SendTimeout = 30000;
+                await clients[idx].ConnectAsync(nodes[idx].Host, nodes[idx].Port);
+                var stream = clients[idx].GetStream();
+                writers[idx] = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true };
+                readers[idx] = new StreamReader(stream, Encoding.UTF8);
+                Console.WriteLine($"[Контроллер] Подключен к узлу {idx}: {nodes[idx].Host}:{nodes[idx].Port}");
+            });
+        }
+        await Task.WhenAll(connectTasks);
+
+        // 2. Инициализация - ПАРАЛЛЕЛЬНО
+        Console.WriteLine($"[Контроллер] Инициализация узлов с n={n}");
+        var initTasks = new Task[p];
+        for (int i = 0; i < p; i++)
+        {
+            int idx = i;
+            initTasks[i] = writers[idx].WriteLineAsync($"INIT {n}");
+        }
+        await Task.WhenAll(initTasks);
+
+        // 3. Пакетная отправка столбцов
+        Console.WriteLine($"[Контроллер] Пакетная отправка столбцов...");
+        
+        // Готовим данные для каждого узла
+        var sendTasks = new Task[p];
+        for (int nodeIdx = 0; nodeIdx < p; nodeIdx++)
+        {
+            int currentNode = nodeIdx;
+            sendTasks[currentNode] = Task.Run(async () =>
+            {
+                var batchBuilder = new StringBuilder();
+                
+                for (int j = currentNode; j < n; j += p)
                 {
-                    nodes.Add((parts[0].Trim(), port));
+                    batchBuilder.AppendLine($"COL {j}");
+                    for (int row = 0; row < n; row++)
+                    {
+                        batchBuilder.AppendLine(loadedA[row, j].ToString("R"));
+                    }
+                    
+                    // Отправляем пачками по 5 столбцов
+                    if (batchBuilder.Length > 50000)
+                    {
+                        await writers[currentNode].WriteAsync(batchBuilder.ToString());
+                        batchBuilder.Clear();
+                    }
                 }
-            }
+                
+                if (batchBuilder.Length > 0)
+                {
+                    await writers[currentNode].WriteAsync(batchBuilder.ToString());
+                }
+                
+                int columnsSent = (n - currentNode + p - 1) / p;
+                Console.WriteLine($"[Контроллер] Узел {currentNode}: отправлено {columnsSent} столбцов");
+            });
+        }
+        await Task.WhenAll(sendTasks);
 
-            if (nodes.Count == 0)
-            {
-                throw new InvalidOperationException("Файл nodes.txt не содержит корректных узлов.");
-            }
+        // 4. Отправка вектора b - ПАРАЛЛЕЛЬНО
+        Console.WriteLine($"[Контроллер] Отправка вектора b...");
+        var vectorBuilder = new StringBuilder();
+        vectorBuilder.AppendLine("VECTOR_B");
+        for (int row = 0; row < n; row++)
+        {
+            vectorBuilder.AppendLine(loadedB[row].ToString("R"));
+        }
+        string vectorData = vectorBuilder.ToString();
+        
+        var vectorTasks = new Task[p];
+        for (int i = 0; i < p; i++)
+        {
+            int idx = i;
+            vectorTasks[i] = writers[idx].WriteAsync(vectorData);
+        }
+        await Task.WhenAll(vectorTasks);
 
-            var nodeCount = nodes.Count;
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            
-            int n = loadedB.Length;
-            int p = nodes.Count;
+        // 5. Проверка готовности - ПАРАЛЛЕЛЬНО
+        Console.WriteLine($"[Контроллер] Ожидание готовности узлов...");
+        var readyTasks = new Task<string>[p];
+        for (int i = 0; i < p; i++)
+        {
+            int idx = i;
+            readyTasks[i] = readers[idx].ReadLineAsync();
+        }
+        
+        var responses = await Task.WhenAll(readyTasks);
+        for (int i = 0; i < p; i++)
+        {
+            if (responses[i] != "READY")
+                throw new Exception($"Worker {i} не готов: {responses[i]}");
+        }
 
-            // Подключение к worker'ам
-            var clients = new TcpClient[p];
-            var writers = new StreamWriter[p];
-            var readers = new StreamReader[p];
+        // 6. Прямой ход с оптимизациями
+        Console.WriteLine($"[Контроллер] Начало прямого хода...");
+        var b_local = (double[])loadedB.Clone();
+        
+        // Кэш для столбцов
+        var columnCache = new Dictionary<int, double[]>();
+        
+        for (int k = 0; k < n - 1; k++)
+        {
+            int workerWithColK = k % p;
             
             double[] solution = null;
 
@@ -229,21 +347,35 @@ namespace GaussWebApp.Controllers
             }
             try
             {
-                // 1. Подключаемся ко всем worker'ам
-                for (int i = 0; i < p; i++)
+                await writers[workerWithColK].WriteLineAsync($"GET_COLUMN {k}");
+                
+                string response = await readers[workerWithColK].ReadLineAsync();
+                if (!response.StartsWith($"COLUMN {k}"))
+                    throw new Exception($"Ошибка получения столбца {k}");
+                    
+                columnK = new double[n];
+                
+                // Параллельное чтение элементов столбца
+                var readTasks = new Task<string>[n];
+                for (int i = 0; i < n; i++)
                 {
-                    clients[i] = new TcpClient();
-                    clients[i].Connect(nodes[i].Host, nodes[i].Port);
-                    var stream = clients[i].GetStream();
-                    writers[i] = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true };
-                    readers[i] = new StreamReader(stream, Encoding.UTF8);
-                    Console.WriteLine($"[Контроллер] Подключен к узлу {i}: {nodes[i].Host}:{nodes[i].Port}");
+                    readTasks[i] = readers[workerWithColK].ReadLineAsync();
                 }
+                
+                var columnValues = await Task.WhenAll(readTasks);
+                for (int i = 0; i < n; i++)
+                {
+                    columnK[i] = double.Parse(columnValues[i] ?? "0");
+                }
+                
+                columnCache[k] = columnK;
+            }
 
-                // 2. Инициализация
-                Console.WriteLine($"[Контроллер] Инициализация узлов с n={n}");
-                for (int i = 0; i < p; i++)
-                    await writers[i].WriteLineAsync($"INIT {n}");
+            // Выбор главного элемента
+            int pivot = k;
+            for (int i = k + 1; i < n; i++)
+                if (Math.Abs(columnK[i]) > Math.Abs(columnK[pivot]))
+                    pivot = i;
 
                 // 3. Циклическое размещение столбцов матрицы A
                 Console.WriteLine($"[Контроллер] Распределение столбцов между {p} узлами...");
@@ -314,10 +446,13 @@ namespace GaussWebApp.Controllers
                 Console.WriteLine($"[Контроллер] Ожидание готовности узлов...");
                 for (int i = 0; i < p; i++)
                 {
-                    string response = await readers[i].ReadLineAsync();
-                    if (response != "READY")
-                        throw new Exception($"Worker {i} не готов: {response}");
+                    if (swapResponses[w] != "OK")
+                        throw new Exception($"Worker {w} ошибка SWAP_ROWS");
                 }
+                
+                (b_local[k], b_local[pivot]) = (b_local[pivot], b_local[k]);
+                (columnK[k], columnK[pivot]) = (columnK[pivot], columnK[k]);
+            }
 
                Console.WriteLine($"[Контроллер] Начало прямого хода...");
 var b_local = (double[])loadedB.Clone();
@@ -647,48 +782,100 @@ for (int i = 0; i < p; i++)
 
 await Task.WhenAll(doneTasks);
 
-                sw.Stop();
+        // 8. Оптимизированный обратный ход
+        Console.WriteLine($"[Контроллер] Выполнение обратного хода...");
+        solution = new double[n];
+        
+        const int BATCH_SIZE = 20; // Обрабатываем по 20 строк за раз
+        
+        for (int batchStart = n - 1; batchStart >= 0; batchStart -= BATCH_SIZE)
+        {
+            int batchEnd = Math.Max(batchStart - BATCH_SIZE, -1);
+            
+            for (int i = batchStart; i > batchEnd; i--)
+            {
+                solution[i] = b_local[i];
                 
-                // 10. Проверка корректности
-                Console.WriteLine($"[Контроллер] Проверка решения...");
-                double maxResidual = 0;
-                for (int i = 0; i < Math.Min(10, n); i++)
+                // Группируем запросы по worker'ам
+                var requestsByWorker = new Dictionary<int, List<int>>();
+                for (int j = i + 1; j < n; j++)
                 {
-                    double sum = 0;
-                    for (int j = 0; j < n; j++)
-                        sum += loadedA[i, j] * solution[j];
-                    double residual = Math.Abs(sum - loadedB[i]);
-                    maxResidual = Math.Max(maxResidual, residual);
-                    
-                    if (i < 3)
-                        Console.WriteLine($"[Контроллер] x[{i}] = {solution[i]:F6}, невязка = {residual:E6}");
+                    int workerIdx = j % p;
+                    if (!requestsByWorker.ContainsKey(workerIdx))
+                        requestsByWorker[workerIdx] = new List<int>();
+                    requestsByWorker[workerIdx].Add(j);
                 }
                 
-                Console.WriteLine($"[Контроллер] === Распределённое вычисление завершено ===");
-                Console.WriteLine($"[Контроллер] Узлов: {nodeCount}, Время: {sw.Elapsed.TotalSeconds:F3}с");
-                Console.WriteLine($"[Контроллер] Макс. невязка: {maxResidual:E10}");
-            }
-            finally
-            {
-                // Очистка ресурсов
-                for (int i = 0; i < p; i++)
+                // Выполняем запросы параллельно
+                var sumTasks = new List<Task<double>>();
+                foreach (var kvp in requestsByWorker)
                 {
                     _locks[i]?.Dispose();
                     writers[i]?.Dispose();
                     readers[i]?.Dispose();
                     clients[i]?.Close();
                 }
+                
+                var sumResults = await Task.WhenAll(sumTasks);
+                solution[i] -= sumResults.Sum();
+                solution[i] /= diag[i];
             }
-
-            string nodeInfo = $"{nodeCount} узел(ов): ";
-            for (int i = 0; i < Math.Min(nodeCount, 3); i++)
-            {
-                nodeInfo += $"{nodes[i].Host}:{nodes[i].Port}";
-                if (i < Math.Min(nodeCount, 3) - 1) nodeInfo += ", ";
-            }
-            if (nodeCount > 3) nodeInfo += "...";
-
-            return (solution, sw.Elapsed.TotalSeconds, nodeCount, nodeInfo);
+            
+            int processed = n - batchStart + Math.Min(BATCH_SIZE, batchStart + 1);
+            Console.WriteLine($"[Контроллер] Обратный ход: {processed}/{n} строк");
         }
+
+        // 9. Завершение
+        Console.WriteLine($"[Контроллер] Завершение работы узлов...");
+        var doneTasks = new Task[p];
+        for (int i = 0; i < p; i++)
+        {
+            int idx = i;
+            doneTasks[i] = writers[idx].WriteLineAsync("DONE");
+        }
+        await Task.WhenAll(doneTasks);
+
+        sw.Stop();
+        
+        // 10. Проверка
+        Console.WriteLine($"[Контроллер] Проверка решения...");
+        double maxResidual = 0;
+        Parallel.For(0, Math.Min(10, n), i =>
+        {
+            double sum = 0;
+            for (int j = 0; j < n; j++)
+                sum += loadedA[i, j] * solution[j];
+            double residual = Math.Abs(sum - loadedB[i]);
+            if (residual > maxResidual)
+                maxResidual = residual;
+            
+            if (i < 3)
+                Console.WriteLine($"[Контроллер] x[{i}] = {solution[i]:F6}, невязка = {residual:E6}");
+        });
+        
+        Console.WriteLine($"[Контроллер] === Распределённое вычисление завершено ===");
+        Console.WriteLine($"[Контроллер] Узлов: {nodeCount}, Время: {sw.Elapsed.TotalSeconds:F3}с");
+        Console.WriteLine($"[Контроллер] Макс. невязка: {maxResidual:E10}");
+    }
+    finally
+    {
+        for (int i = 0; i < p; i++)
+        {
+            writers[i]?.Dispose();
+            readers[i]?.Dispose();
+            clients[i]?.Close();
+        }
+    }
+
+    string nodeInfo = $"{nodeCount} узел(ов): ";
+    for (int i = 0; i < Math.Min(nodeCount, 3); i++)
+    {
+        nodeInfo += $"{nodes[i].Host}:{nodes[i].Port}";
+        if (i < Math.Min(nodeCount, 3) - 1) nodeInfo += ", ";
+    }
+    if (nodeCount > 3) nodeInfo += "...";
+
+    return (solution, sw.Elapsed.TotalSeconds, nodeCount, nodeInfo);
+}
     }
 }
