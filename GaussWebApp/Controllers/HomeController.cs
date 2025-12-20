@@ -286,9 +286,66 @@ private async Task<(double[] solution, double time, int nodeCount, string nodeIn
         {
             int workerWithColK = k % p;
             
-            // Получаем столбец k (с кэшированием)
-            double[] columnK;
-            if (!columnCache.TryGetValue(k, out columnK))
+            double[] solution = null;
+
+            var _locks = new SemaphoreSlim[p];
+            for (int i = 0; i < p; i++)
+                _locks[i] = new SemaphoreSlim(1, 1); // 1 поток может войти
+
+                async Task<string> SendCommandWithLock(int worker, StreamWriter writer, StreamReader reader, string command)
+    {
+        await _locks[worker].WaitAsync();
+        try
+        {
+            await writer.WriteLineAsync(command);
+            return await reader.ReadLineAsync();
+        }
+        finally
+        {
+            _locks[worker].Release();
+        }
+    }
+    
+    // Локальная функция для отправки столбца с блокировкой
+    async Task SendColumnWithLock(int worker, int columnIndex)
+    {
+        await _locks[worker].WaitAsync();
+        try
+        {
+            await writers[worker].WriteLineAsync($"COL {columnIndex}");
+            for (int row = 0; row < n; row++)
+                await writers[worker].WriteLineAsync(loadedA[row, columnIndex].ToString("R"));
+        }
+        finally
+        {
+            _locks[worker].Release();
+        }
+    }
+    
+    // Локальная функция для получения столбца с блокировкой
+            async Task<double[]> GetColumnWithLock(int worker, int columnIndex)
+            {
+                await _locks[worker].WaitAsync();
+                try
+                {
+                    await writers[worker].WriteLineAsync($"GET_COLUMN {columnIndex}");
+                    string response = await readers[worker].ReadLineAsync();
+                    
+                    if (!response.StartsWith($"COLUMN {columnIndex}"))
+                        throw new Exception($"Ошибка получения столбца {columnIndex}: {response}");
+                        
+                    var column = new double[n];
+                    for (int i = 0; i < n; i++)
+                        column[i] = double.Parse(await readers[worker].ReadLineAsync() ?? "0");
+                        
+                    return column;
+                }
+                finally
+                {
+                    _locks[worker].Release();
+                }
+            }
+            try
             {
                 await writers[workerWithColK].WriteLineAsync($"GET_COLUMN {k}");
                 
@@ -320,28 +377,74 @@ private async Task<(double[] solution, double time, int nodeCount, string nodeIn
                 if (Math.Abs(columnK[i]) > Math.Abs(columnK[pivot]))
                     pivot = i;
 
-            // Обмен строками если нужно
-            if (pivot != k)
-            {
-                // Параллельная отправка команд обмена
-                var swapTasks = new Task[p];
-                for (int w = 0; w < p; w++)
+                // 3. Циклическое размещение столбцов матрицы A
+                Console.WriteLine($"[Контроллер] Распределение столбцов между {p} узлами...");
+                var columnTasks = new List<Task>();
+                for (int j = 0; j < n; j++)
                 {
-                    int workerIdx = w;
-                    swapTasks[w] = writers[workerIdx].WriteLineAsync($"SWAP_ROWS {k} {pivot}");
+                    int columnIndex = j; // capture для замыкания
+                    int nodeIdx = columnIndex % p;
+                    
+                    columnTasks.Add(Task.Run(async () =>
+                    {
+                        await _locks[nodeIdx].WaitAsync();
+                        try
+                        {
+                            await writers[nodeIdx].WriteLineAsync($"COL {columnIndex}");
+                            for (int row = 0; row < n; row++)
+                                await writers[nodeIdx].WriteLineAsync(loadedA[row, columnIndex].ToString("R"));
+                        }
+                        finally
+                        {
+                            _locks[nodeIdx].Release();
+                        }
+                        
+                        // Логирование прогресса
+                        if (columnIndex % 100 == 0)
+                            Console.WriteLine($"[Контроллер] Отправлен столбец {columnIndex}/{n}");
+                    }));
+                    
+                    // Ограничиваем число одновременно выполняемых задач
+                    if (columnTasks.Count >= Environment.ProcessorCount * 2)
+                    {
+                        await Task.WhenAll(columnTasks);
+                        columnTasks.Clear();
+                    }
                 }
-                await Task.WhenAll(swapTasks);
-                
-                // Параллельная проверка ответов
-                var swapResponseTasks = new Task<string>[p];
-                for (int w = 0; w < p; w++)
-                {
-                    int workerIdx = w;
-                    swapResponseTasks[w] = readers[workerIdx].ReadLineAsync();
-                }
-                
-                var swapResponses = await Task.WhenAll(swapResponseTasks);
-                for (int w = 0; w < p; w++)
+
+                // Дожидаемся оставшихся задач
+                if (columnTasks.Count > 0)
+                    await Task.WhenAll(columnTasks);
+
+                // 4. Отправляем вектор b на КАЖДЫЙ узел
+                    Console.WriteLine($"[Контроллер] Параллельная отправка вектора b на {p} узлов...");
+
+                    var vectorTasks = new List<Task>();
+                    for (int workerIndex = 0; workerIndex < p; workerIndex++)
+                    {
+                        int worker = workerIndex; // capture для замыкания
+                        
+                        vectorTasks.Add(Task.Run(async () =>
+                        {
+                            await _locks[worker].WaitAsync();
+                            try
+                            {
+                                await writers[worker].WriteLineAsync("VECTOR_B");
+                                for (int row = 0; row < n; row++)
+                                    await writers[worker].WriteLineAsync(loadedB[row].ToString("R"));
+                            }
+                            finally
+                            {
+                                _locks[worker].Release();
+                            }
+                        }));
+                    }
+
+                    await Task.WhenAll(vectorTasks);
+
+                // 5. Ждём READY от всех
+                Console.WriteLine($"[Контроллер] Ожидание готовности узлов...");
+                for (int i = 0; i < p; i++)
                 {
                     if (swapResponses[w] != "OK")
                         throw new Exception($"Worker {w} ошибка SWAP_ROWS");
@@ -351,118 +454,333 @@ private async Task<(double[] solution, double time, int nodeCount, string nodeIn
                 (columnK[k], columnK[pivot]) = (columnK[pivot], columnK[k]);
             }
 
-            // Нормализация
-            double pivotValue = columnK[k];
-            if (Math.Abs(pivotValue) < 1e-12)
-                throw new Exception($"Матрица вырожденна на шаге {k}");
-            
-            b_local[k] /= pivotValue;
-            
-            // Параллельная отправка нормализации
-            var normalizeTasks = new Task[p];
-            for (int w = 0; w < p; w++)
-            {
-                int workerIdx = w;
-                normalizeTasks[w] = writers[workerIdx].WriteLineAsync($"NORMALIZE_ROW {k} {pivotValue}");
-            }
-            await Task.WhenAll(normalizeTasks);
-            
-            var normResponseTasks = new Task<string>[p];
-            for (int w = 0; w < p; w++)
-            {
-                int workerIdx = w;
-                normResponseTasks[w] = readers[workerIdx].ReadLineAsync();
-            }
-            
-            var normResponses = await Task.WhenAll(normResponseTasks);
-            for (int w = 0; w < p; w++)
-            {
-                if (normResponses[w] != "OK")
-                    throw new Exception($"Worker {w} ошибка NORMALIZE_ROW");
-            }
+               Console.WriteLine($"[Контроллер] Начало прямого хода...");
+var b_local = (double[])loadedB.Clone();
+var localColumnK = new double[n]; // Храним столбец k локально для всех воркеров
 
-            // Исключение - пакетная отправка
-            int operationsCount = n - k - 1;
-            if (operationsCount > 0)
-            {
-                var operationsBuilder = new StringBuilder();
-                operationsBuilder.AppendLine($"ELIMINATE_BATCH {k} {operationsCount}");
-                
-                for (int i = k + 1; i < n; i++)
-                {
-                    operationsBuilder.AppendLine($"{i} {columnK[i]}");
-                }
-                operationsBuilder.AppendLine("END_BATCH");
-                
-                await writers[workerWithColK].WriteAsync(operationsBuilder.ToString());
-                
-                string elimResponse = await readers[workerWithColK].ReadLineAsync();
-                if (elimResponse != "OK")
-                    throw new Exception($"Worker {workerWithColK} ошибка ELIMINATE_BATCH");
-            }
-
-            // Обновляем b_local
-            for (int i = k + 1; i < n; i++)
-            {
-                b_local[i] -= columnK[i] * b_local[k];
-            }
-            
-            // Очистка старого кэша
-            if (columnCache.Count > 20)
-            {
-                var oldKeys = columnCache.Keys.Where(key => key < k - 10).ToList();
-                foreach (var key in oldKeys) columnCache.Remove(key);
-            }
-            
-            if ((k + 1) % 100 == 0 || k == n - 2)
-            {
-                Console.WriteLine($"[Контроллер] Обработан шаг {k + 1}/{n - 1}");
-            }
-        }
-
-        // 7. Получение диагональных элементов с использованием GET_MULTIPLE_ELEMENTS
-        Console.WriteLine($"[Контроллер] Получение диагональных элементов...");
-        var diag = new double[n];
+for (int k = 0; k < n - 1; k++)
+{
+    // 6.1. Выбор главного элемента
+    int workerWithColK = k % p;
+    
+    await writers[workerWithColK].WriteLineAsync($"GET_COLUMN {k}");
+    
+    string response = await readers[workerWithColK].ReadLineAsync();
+    if (!response.StartsWith($"COLUMN {k}"))
+        throw new Exception($"Ошибка получения столбца {k}: {response}");
         
-        // Группируем запросы по узлам
-        var diagRequestsByNode = new Dictionary<int, List<int>>();
-        for (int k = 0; k < n; k++)
-        {
-            int workerIdx = k % p;
-            if (!diagRequestsByNode.ContainsKey(workerIdx))
-                diagRequestsByNode[workerIdx] = new List<int>();
-            diagRequestsByNode[workerIdx].Add(k);
-        }
+    for (int i = 0; i < n; i++)
+        localColumnK[i] = double.Parse(await readers[workerWithColK].ReadLineAsync() ?? "0");
+
+    // Находим строку с максимальным элементом в столбце k
+    int pivot = k;
+    for (int i = k + 1; i < n; i++)
+        if (Math.Abs(localColumnK[i]) > Math.Abs(localColumnK[pivot]))
+            pivot = i;
+
+    // 6.2. Обмен строками если нужно
+    if (pivot != k)
+    {
+        Console.WriteLine($"[Контроллер] Обмен строк {k}<->{pivot} (макс элемент: {Math.Abs(localColumnK[pivot]):E6})");
         
-        // Отправляем запросы пакетами
-        var diagTasks = new List<Task>();
-        foreach (var kvp in diagRequestsByNode)
-        {
-            int workerIdx = kvp.Key;
-            var columns = kvp.Value;
-            
-            diagTasks.Add(Task.Run(async () =>
+            var swapTasks = new List<Task<string>>();
+            for (int w = 0; w < p; w++)
             {
-                var requestBuilder = new StringBuilder();
-                requestBuilder.AppendLine("GET_MULTIPLE_ELEMENTS");
-                requestBuilder.AppendLine(columns.Count.ToString());
+                int worker = w; // capture
                 
-                foreach (int col in columns)
+                swapTasks.Add(Task.Run(async () =>
                 {
-                    requestBuilder.AppendLine($"{col} {col}");
+                    await _locks[worker].WaitAsync();
+                    try
+                    {
+                        await writers[worker].WriteLineAsync($"SWAP_ROWS {k} {pivot}");
+                        return await readers[worker].ReadLineAsync();
+                    }
+                    finally
+                    {
+                        _locks[worker].Release();
+                    }
+                }));
+            }
+
+            var swapResults = await Task.WhenAll(swapTasks);
+            for (int w = 0; w < p; w++)
+            {
+                if (swapResults[w] != "OK")
+                    throw new Exception($"Worker {w} ошибка SWAP_ROWS: {swapResults[w]}");
+            }
+        
+        // Обмен в локальном векторе b
+        (b_local[k], b_local[pivot]) = (b_local[pivot], b_local[k]);
+        
+        // Обновляем localColumnK после обмена строк
+        await writers[workerWithColK].WriteLineAsync($"GET_COLUMN {k}");
+        response = await readers[workerWithColK].ReadLineAsync();
+        for (int i = 0; i < n; i++)
+            localColumnK[i] = double.Parse(await readers[workerWithColK].ReadLineAsync() ?? "0");
+    }
+
+    // 6.3. Нормализация строки k
+    double pivotValue = localColumnK[k];
+    if (Math.Abs(pivotValue) < 1e-12)
+        throw new Exception($"Матрица вырожденна на шаге {k} (pivot={pivotValue:E6})");
+    
+    Console.WriteLine($"[Контроллер] Шаг {k}: делим строку {k} на {pivotValue:E6}");
+    
+    // Сначала обновляем локальный вектор b
+    b_local[k] /= pivotValue;
+    
+    // Отправляем команды на нормализацию всем воркерам
+        var normalizeTasks = new List<Task<(string, string)>>();
+        for (int w = 0; w < p; w++)
+        {
+            int worker = w; // capture
+            
+            normalizeTasks.Add(Task.Run(async () =>
+            {
+                await _locks[worker].WaitAsync();
+                try
+                {
+                    // Отправляем обе команды подряд для минимизации блокировок
+                    await writers[worker].WriteLineAsync($"NORMALIZE_ROW {k} {pivotValue}");
+                    await writers[worker].WriteLineAsync($"UPDATE_B_ELEMENT {k} {b_local[k]}");
+                    
+                    // Читаем оба ответа
+                    string response1 = await readers[worker].ReadLineAsync();
+                    string response2 = await readers[worker].ReadLineAsync();
+                    
+                    return (response1, response2);
                 }
-                
-                await writers[workerIdx].WriteAsync(requestBuilder.ToString());
-                
-                // Читаем ответы
-                for (int i = 0; i < columns.Count; i++)
+                finally
                 {
-                    string elem = await readers[workerIdx].ReadLineAsync();
-                    diag[columns[i]] = double.Parse(elem);
+                    _locks[worker].Release();
                 }
             }));
         }
-        await Task.WhenAll(diagTasks);
+
+        var normalizeResults = await Task.WhenAll(normalizeTasks);
+        for (int w = 0; w < p; w++)
+        {
+            if (normalizeResults[w].Item1 != "OK") 
+                throw new Exception($"Worker {w} ошибка NORMALIZE_ROW: {normalizeResults[w].Item1}");
+            if (normalizeResults[w].Item2 != "OK")
+                throw new Exception($"Worker {w} ошибка UPDATE_B_ELEMENT: {normalizeResults[w].Item2}");
+        }
+
+    // 6.4. Исключение элементов ниже диагонали
+    // Сначала вычисляем все multipliers для строк i > k
+    var multipliers = new Dictionary<int, double>();
+    for (int i = k + 1; i < n; i++)
+    {
+        multipliers[i] = localColumnK[i]; // factor = A[i,k]
+    }
+    
+    // Обновляем локальный вектор b для всех строк i > k
+    for (int i = k + 1; i < n; i++)
+    {
+        b_local[i] -= multipliers[i] * b_local[k];
+    }
+    
+    // Теперь отправляем операции исключения для матрицы A каждому воркеру
+    // Каждый воркер должен обновить ВСЕ свои столбцы для ВСЕХ строк i > k
+    
+    // Разделяем операции по воркерам для эффективности
+var eliminateTasks = new List<Task<string>>();
+for (int w = 0; w < p; w++)
+{
+    int worker = w; // capture
+    
+    eliminateTasks.Add(Task.Run(async () =>
+    {
+        // Подготавливаем операции для этого воркера
+        var operations = new StringBuilder();
+        for (int i = k + 1; i < n; i++)
+        {
+            operations.AppendLine($"{i} {multipliers[i]}");
+        }
+        
+        if (operations.Length > 0)
+        {
+            await _locks[worker].WaitAsync();
+            try
+            {
+                // Отправляем всё одним запросом
+                await writers[worker].WriteLineAsync($"ELIMINATE_BATCH {k} {n - k - 1}");
+                await writers[worker].WriteAsync(operations.ToString());
+                await writers[worker].WriteLineAsync("END_BATCH");
+                await writers[worker].FlushAsync();
+                
+                return await readers[worker].ReadLineAsync();
+            }
+            finally
+            {
+                _locks[worker].Release();
+            }
+        }
+        return "OK"; // Нет операций - нет ошибок
+    }));
+}
+
+var eliminateResults = await Task.WhenAll(eliminateTasks);
+for (int w = 0; w < p; w++)
+{
+    if (eliminateResults[w] != "OK")
+        throw new Exception($"Worker {w} ошибка ELIMINATE_BATCH: {eliminateResults[w]}");
+}
+    
+    // Логируем прогресс
+    if (k % 100 == 0 || k == n - 2)
+    {
+        Console.WriteLine($"[Контроллер] Выполнен шаг {k+1}/{n-1} ({(k+1)*100.0/(n-1):F1}%)");
+    }
+}
+
+// 6.5. Нормализация последней диагонали (строки n-1)
+int lastRow = n - 1;
+int lastWorker = lastRow % p;
+
+// Получаем последний диагональный элемент
+await writers[lastWorker].WriteLineAsync($"GET_ELEMENT {lastRow} {lastRow}");
+string lastDiagStr = await readers[lastWorker].ReadLineAsync();
+double lastDiag = double.Parse(lastDiagStr);
+
+if (Math.Abs(lastDiag) < 1e-12)
+    throw new Exception($"Матрица вырожденна в последней строке (диагональ={lastDiag:E6})");
+
+// Нормализуем последнюю строку
+b_local[lastRow] /= lastDiag;
+
+for (int w = 0; w < p; w++)
+{
+    await writers[w].WriteLineAsync($"NORMALIZE_ROW {lastRow} {lastDiag}");
+    string response1 = await readers[w].ReadLineAsync();
+    
+    await writers[w].WriteLineAsync($"UPDATE_B_ELEMENT {lastRow} {b_local[lastRow]}");
+    string response2 = await readers[w].ReadLineAsync();
+    
+    if (response1 != "OK") throw new Exception($"Worker {w} ошибка NORMALIZE_ROW для последней строки");
+    if (response2 != "OK") throw new Exception($"Worker {w} ошибка UPDATE_B_ELEMENT для последней строки");
+}
+
+Console.WriteLine($"[Контроллер] Прямой ход завершен");
+
+    // 7. После прямого хода все воркеры должны иметь верхнюю треугольную матрицу
+    // Получаем диагональные элементы для обратного хода
+var diag = new double[n];
+var diagTasks = new List<Task<(int, double)>>();
+
+for (int k = 0; k < n; k++)
+{
+    int row = k; // capture
+    int workerIdx = row % p;
+    
+    diagTasks.Add(Task.Run(async () =>
+    {
+        await _locks[workerIdx].WaitAsync();
+        try
+        {
+            await writers[workerIdx].WriteLineAsync($"GET_ELEMENT {row} {row}");
+            string elem = await readers[workerIdx].ReadLineAsync();
+            return (row, double.Parse(elem));
+        }
+        finally
+        {
+            _locks[workerIdx].Release();
+        }
+    }));
+    
+    // Батчинг для больших матриц
+    if (diagTasks.Count >= 100)
+    {
+        var results = await Task.WhenAll(diagTasks);
+        foreach (var (index, value) in results)
+            diag[index] = value;
+        diagTasks.Clear();
+    }
+}
+
+// Оставшиеся задачи
+if (diagTasks.Count > 0)
+{
+    var results = await Task.WhenAll(diagTasks);
+    foreach (var (index, value) in results)
+        diag[index] = value;
+}
+    // 8. Обратный ход
+    Console.WriteLine($"[Контроллер] Выполнение обратного хода...");
+    solution = new double[n];
+    
+for (int i = n - 1; i >= 0; i--)
+{
+    solution[i] = b_local[i];
+    
+    // Параллельно получаем все элементы строки i
+    var rowTasks = new List<Task<(int, double)>>();
+    for (int j = i + 1; j < n; j++)
+    {
+        int column = j; // capture
+        int workerIdx = column % p;
+        
+        rowTasks.Add(Task.Run(async () =>
+        {
+            await _locks[workerIdx].WaitAsync();
+            try
+            {
+                await writers[workerIdx].WriteLineAsync($"GET_ELEMENT {i} {column}");
+                string elem = await readers[workerIdx].ReadLineAsync();
+                return (column, double.Parse(elem));
+            }
+            finally
+            {
+                _locks[workerIdx].Release();
+            }
+        }));
+    }
+    
+    // Обрабатываем батчами по 50 элементов
+    var batchSize = 50;
+    for (int batchStart = 0; batchStart < rowTasks.Count; batchStart += batchSize)
+    {
+        int batchEnd = Math.Min(batchStart + batchSize, rowTasks.Count);
+        var batchTasks = rowTasks.GetRange(batchStart, batchEnd - batchStart);
+        
+        var batchResults = await Task.WhenAll(batchTasks);
+        foreach (var (j, a_ij) in batchResults)
+        {
+            solution[i] -= a_ij * solution[j];
+        }
+    }
+    
+    solution[i] /= diag[i];
+    
+    // Прогресс для больших матриц
+    if (i % 100 == 0)
+        Console.WriteLine($"[Контроллер] Обратный ход: обработано {n - i}/{n}");
+}
+
+
+                // 9. Завершаем worker'ов
+                Console.WriteLine($"[Контроллер] Завершение работы узлов...");
+var doneTasks = new List<Task>();
+for (int i = 0; i < p; i++)
+{
+    int worker = i; // capture
+    
+    doneTasks.Add(Task.Run(async () =>
+    {
+        await _locks[worker].WaitAsync();
+        try
+        {
+            await writers[worker].WriteLineAsync("DONE");
+        }
+        finally
+        {
+            _locks[worker].Release();
+        }
+    }));
+}
+
+await Task.WhenAll(doneTasks);
 
         // 8. Оптимизированный обратный ход
         Console.WriteLine($"[Контроллер] Выполнение обратного хода...");
@@ -492,35 +810,10 @@ private async Task<(double[] solution, double time, int nodeCount, string nodeIn
                 var sumTasks = new List<Task<double>>();
                 foreach (var kvp in requestsByWorker)
                 {
-                    int workerIdx = kvp.Key;
-                    var columns = kvp.Value;
-                    
-                    sumTasks.Add(Task.Run(async () =>
-                    {
-                        double sum = 0;
-                        
-                        // Используем GET_MULTIPLE_ELEMENTS для пакетного запроса
-                        var requestBuilder = new StringBuilder();
-                        requestBuilder.AppendLine("GET_MULTIPLE_ELEMENTS");
-                        requestBuilder.AppendLine(columns.Count.ToString());
-                        
-                        foreach (int col in columns)
-                        {
-                            requestBuilder.AppendLine($"{i} {col}");
-                        }
-                        
-                        await writers[workerIdx].WriteAsync(requestBuilder.ToString());
-                        
-                        // Читаем ответы
-                        foreach (int col in columns)
-                        {
-                            string elem = await readers[workerIdx].ReadLineAsync();
-                            double a_ij = double.Parse(elem);
-                            sum += a_ij * solution[col];
-                        }
-                        
-                        return sum;
-                    }));
+                    _locks[i]?.Dispose();
+                    writers[i]?.Dispose();
+                    readers[i]?.Dispose();
+                    clients[i]?.Close();
                 }
                 
                 var sumResults = await Task.WhenAll(sumTasks);

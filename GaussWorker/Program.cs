@@ -154,143 +154,86 @@ class Program
                                     continue;
                                 }
 
-                                int colIndex = int.Parse(parts[1]);
-                                
-                                // Проверяем кэш
-                                if (!columnCache.TryGetValue(colIndex, out var column))
-                                {
-                                    column = localColumns[colIndex] ?? new double[n];
-                                    columnCache[colIndex] = column;
-                                }
-                                
-                                // Используем StringBuilder для быстрой отправки
-                                var sb = new StringBuilder();
-                                sb.AppendLine($"COLUMN {colIndex}");
-                                for (int i = 0; i < n; i++)
-                                {
-                                    sb.AppendLine(column[i].ToString("R"));
-                                }
-                                
-                                await writer.WriteAsync(sb.ToString());
-                                // Console.WriteLine($"[Worker {port}] Отправлен столбец {colIndex}");
-                            }
-                            else if (line.StartsWith("SWAP_ROWS"))
+                            await writer.WriteLineAsync("OK");
+                            Console.WriteLine($"[Worker {port}] Выполнен обмен строк {row1}<->{row2}");
+                        }
+                        else if (line.StartsWith("UPDATE_B_ELEMENT"))
+                        {
+                            var parts = line.Split(' ');
+                            int row = int.Parse(parts[1]);
+                            double value = double.Parse(parts[2]);
+                            
+                            if (b != null && row < b.Length)
                             {
-                                var parts = line.Split(' ');
-                                if (parts.Length != 3)
-                                {
-                                    await writer.WriteLineAsync("ERROR: Неверный формат SWAP_ROWS");
-                                    continue;
-                                }
-
-                                int row1 = int.Parse(parts[1]);
-                                int row2 = int.Parse(parts[2]);
-
-                                // Быстрый обмен строк с проверкой границ
-                                if (row1 >= 0 && row1 < n && row2 >= 0 && row2 < n)
-                                {
-                                    // Обмен в столбцах
-                                    for (int colIdx = 0; colIdx < n; colIdx++)
-                                    {
-                                        var col = localColumns[colIdx];
-                                        if (col != null)
-                                        {
-                                            (col[row1], col[row2]) = (col[row2], col[row1]);
-                                        }
-                                    }
-
-                                    // Обмен в векторе b
-                                    (b[row1], b[row2]) = (b[row2], b[row1]);
-                                    
-                                    // Очищаем кэш элементов, так как они изменились
-                                    elementCache.Clear();
-                                    // Очищаем кэш столбцов, которые были изменены
-                                    columnCache.Clear();
-                                }
-
-                                await writer.WriteLineAsync("OK");
-                                // Console.WriteLine($"[Worker {port}] Выполнен обмен строк {row1}<->{row2}");
+                                b[row] = value;
                             }
-                            else if (line.StartsWith("ELIMINATE_BATCH"))
-                            {
-                                var parts = line.Split(' ');
-                                if (parts.Length != 3)
-                                {
-                                    await writer.WriteLineAsync("ERROR: Неверный формат ELIMINATE_BATCH");
-                                    continue;
-                                }
+                            
+                            await writer.WriteLineAsync("OK");
+                        }
+                        else if (line.StartsWith("ELIMINATE_BATCH"))
+{
+    var parts = line.Split(' ');
+    if (parts.Length != 3)
+    {
+        await writer.WriteLineAsync("ERROR: Неверный формат ELIMINATE_BATCH");
+        continue;
+    }
 
-                                int k = int.Parse(parts[1]);
-                                int totalOperations = int.Parse(parts[2]);
+    int k = int.Parse(parts[1]);
+    int totalOperations = int.Parse(parts[2]);
 
-                                // Console.WriteLine($"[Worker {port}] Пакетная обработка: шаг {k}, операций: {totalOperations}");
+    // Читаем все операции из пакета
+    for (int op = 0; op < totalOperations; op++)
+    {
+        string dataLine = await reader.ReadLineAsync();
+        if (dataLine == null)
+        {
+            await writer.WriteLineAsync($"ERROR: Неожиданный конец потока при чтении операции {op}");
+            break;
+        }
 
-                                // Оптимизация: читаем все операции сразу в буфер
-                                var operations = new (int i, double factor)[totalOperations];
-                                for (int op = 0; op < totalOperations; op++)
-                                {
-                                    string dataLine = await reader.ReadLineAsync();
-                                    if (dataLine == null)
-                                    {
-                                        await writer.WriteLineAsync($"ERROR: Неожиданный конец потока при чтении операции {op}");
-                                        break;
-                                    }
+        if (dataLine == "END_BATCH")
+        {
+            Console.WriteLine($"[Worker {port}] Предупреждение: получен END_BATCH раньше времени");
+            break;
+        }
 
-                                    if (dataLine == "END_BATCH")
-                                    {
-                                        // Console.WriteLine($"[Worker {port}] Предупреждение: получен END_BATCH раньше времени");
-                                        break;
-                                    }
+        var dataParts = dataLine.Split(' ');
+        if (dataParts.Length != 2)
+        {
+            Console.WriteLine($"[Worker {port}] Предупреждение: неверный формат строки: '{dataLine}'");
+            continue;
+        }
 
-                                    var dataParts = dataLine.Split(' ');
-                                    if (dataParts.Length != 2)
-                                    {
-                                        // Console.WriteLine($"[Worker {port}] Предупреждение: неверный формат строки: '{dataLine}'");
-                                        continue;
-                                    }
+        int i = int.Parse(dataParts[0]);
+        double factor = double.Parse(dataParts[1]);
 
-                                    int i = int.Parse(dataParts[0]);
-                                    double factor = double.Parse(dataParts[1]);
-                                    operations[op] = (i, factor);
-                                }
+        // Обновляем вектор b
+        if (b != null && i < b.Length && k < b.Length)
+        {
+            b[i] -= factor * b[k];
+        }
 
-                                // Выполняем операции пакетом (быстрее чем по одной)
-                                for (int op = 0; op < totalOperations; op++)
-                                {
-                                    var (i, factor) = operations[op];
-                                    
-                                    // Выполняем исключение в векторе b
-                                    if (i < n && k < n)
-                                    {
-                                        b[i] -= factor * b[k];
-                                    }
+        // Обновляем все столбцы (матрицу A)
+        foreach (var col in localColumns.Values)
+        {
+            if (i < col.Length && k < col.Length)
+            {
+                col[i] -= factor * col[k];
+            }
+        }
+    }
 
-                                    // Обновляем все столбцы
-                                    for (int colIdx = 0; colIdx < n; colIdx++)
-                                    {
-                                        var col = localColumns[colIdx];
-                                        if (col != null && i < n && k < n)
-                                        {
-                                            col[i] -= factor * col[k];
-                                        }
-                                    }
-                                }
+    // Читаем END_BATCH
+    string endCheck = await reader.ReadLineAsync();
+    if (endCheck != null && endCheck != "END_BATCH")
+    {
+        Console.WriteLine($"[Worker {port}] Предупреждение: ожидался END_BATCH, получено: '{endCheck}'");
+    }
 
-                                // Читаем END_BATCH если он есть
-                                string endCheck = await reader.ReadLineAsync();
-                                if (endCheck != null && endCheck != "END_BATCH")
-                                {
-                                    // Console.WriteLine($"[Worker {port}] Предупреждение: ожидался END_BATCH, получено: '{endCheck}'");
-                                }
-
-                                // Очищаем кэши, так как данные изменились
-                                elementCache.Clear();
-                                columnCache.Clear();
-                                
-                                await writer.WriteLineAsync("OK");
-                                // Console.WriteLine($"[Worker {port}] Пакет шага {k} обработан успешно");
-                            }
-                            else if (line.StartsWith("NORMALIZE_ROW"))
+    await writer.WriteLineAsync("OK");
+}
+                        else if (line.StartsWith("NORMALIZE_ROW"))
                             {
                                 var parts = line.Split(' ');
                                 if (parts.Length != 3)

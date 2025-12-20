@@ -46,6 +46,30 @@ services:
     networks:
       - gauss-network
     restart: unless-stopped
+  
+  gauss-worker-3:
+    build:
+      context: ./GaussWorker
+      dockerfile: Dockerfile
+    container_name: gauss-worker-3
+    command: "9003"
+    ports:
+      - "9003:9003"
+    networks:
+      - gauss-network
+    restart: unless-stopped
+  
+  gauss-worker-4:
+    build:
+      context: ./GaussWorker
+      dockerfile: Dockerfile
+    container_name: gauss-worker-4
+    command: "9004"
+    ports:
+      - "9004:9004"
+    networks:
+      - gauss-network
+    restart: unless-stopped
 
 networks:
   gauss-network:
