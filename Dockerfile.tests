@@ -1,0 +1,25 @@
+FROM mcr.microsoft.com/dotnet/sdk:8.0
+WORKDIR /app
+
+# Копируем ВСЕ файлы
+COPY . .
+
+# Явно восстанавливаем и собираем каждый проект
+RUN dotnet restore GaussWebApp/GaussWebApp.csproj && \
+    dotnet restore GaussWorker/GaussWorker.csproj && \
+    dotnet restore Tests/GaussWebApp.UnitTests/GaussWebApp.UnitTests.csproj && \
+    dotnet restore Tests/GaussWebApp.LoadTests/GaussWebApp.LoadTests.csproj
+
+RUN dotnet build GaussWebApp/GaussWebApp.csproj -c Release --no-restore && \
+    dotnet build GaussWorker/GaussWorker.csproj -c Release --no-restore && \
+    dotnet build Tests/GaussWebApp.UnitTests/GaussWebApp.UnitTests.csproj -c Release --no-restore
+
+# Создаем nodes.txt
+RUN mkdir -p /app/GaussWebApp && \
+    echo "worker:9001" > /app/GaussWebApp/nodes.txt
+
+# Создаем директорию для результатов
+RUN mkdir -p /app/test-results
+
+# Явный запуск тестов из конкретного проекта
+CMD ["/app/run-tests.sh"]

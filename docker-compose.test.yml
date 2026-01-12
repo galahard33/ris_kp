@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  webapp:
+    build: ./GaussWebApp
+    ports:
+      - "8080:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+    networks:
+      - gauss-network
+
+  worker:
+    build: ./GaussWorker
+    command: ["9001"]
+    networks:
+      - gauss-network
+
+  tests:
+    build:
+      context: .  # ОБРАТИТЕ ВНИМАНИЕ: контекст - корневая папка
+      dockerfile: Dockerfile.tests
+    tty: true 
+    stdin_open: true
+    networks:
+      - gauss-network
+    depends_on:
+      - webapp
+      - worker
+    volumes:
+      - ./test-results:/app/test-results  # для сохранения результатов
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - TEST_MODE=true
+    # Команда уже указана в Dockerfile (CMD), но можно переопределить здесь если нужно
+    # command: ["dotnet", "test", "--logger:trx", "--results-directory:/app/test-results"]
+
+networks:
+  gauss-network:
+    driver: bridge
