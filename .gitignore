@@ -12,6 +12,8 @@ artifacts/
 *.nupkg
 *.nuget.props
 *.nuget.targets
+*.csv
+*.png
 
 # ========================================
 # Visual Studio
@@ -81,4 +83,4 @@ secrets.json
 # Docker (опционально)
 # ========================================
 
-*.py
+aa.py
