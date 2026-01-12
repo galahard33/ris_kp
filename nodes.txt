@@ -1,0 +1,4 @@
+gauss-worker-1:9001
+gauss-worker-2:9002
+gauss-worker-3:9003
+gauss-worker-4:9004

@@ -1,15 +1,11 @@
-#!/bin/bash
 
-# run-tests.sh - Скрипт для запуска тестов с подробной информацией
+set -e  
 
-set -e  # Выход при первой ошибке
-
-# Цвета для вывода
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m' 
 
 # Функции для вывода
 print_info() {
@@ -35,27 +31,23 @@ run_tests() {
     print_info "=== ЗАПУСК ТЕСТОВ GAUSS SYSTEM ==="
     print_info "Время начала: $(date)"
     print_info "Текущая директория: $(pwd)"
-    
-    # Проверка структуры проекта
+
     print_info "Проверка структуры проекта..."
     if [ ! -d "Tests" ]; then
         print_error "Папка Tests не найдена!"
         exit 1
     fi
-    
-    # Создание папок для результатов
+
     print_info "Создание папок для результатов..."
     mkdir -p test-results/unit
     mkdir -p test-results/load
     mkdir -p test-results/coverage
     
-    # Создание nodes.txt для тестов
     print_info "Создание nodes.txt для тестов..."
     echo "worker:9001" > GaussWebApp/nodes.txt
     echo "worker:9002" >> GaussWebApp/nodes.txt
     echo "worker:9003" >> GaussWebApp/nodes.txt
     
-    # Запуск тестов
     print_info "=== ЗАПУСК UNIT-ТЕСТОВ ==="
     local unit_start=$(date +%s)
     
@@ -90,10 +82,8 @@ run_tests() {
         print_warning "Время выполнения load-тестов: ${load_duration} секунд"
     fi
     
-    # Анализ результатов
     analyze_results
-    
-    # Итоговая статистика
+
     local end_time=$(date +%s)
     local total_duration=$((end_time - start_time))
     
@@ -102,25 +92,21 @@ run_tests() {
     print_info "Время завершения: $(date)"
     print_info "Результаты сохранены в папке test-results/"
     
-    # Показ содержимого папки с результатами
     print_info "Содержимое папки test-results/:"
     find test-results -type f -name "*.trx" | while read file; do
         print_info "  - $(basename "$file")"
     done
 }
 
-# Функция анализа результатов
 analyze_results() {
     print_info "=== АНАЛИЗ РЕЗУЛЬТАТОВ ==="
-    
-    # Проверка файлов результатов
+
     local unit_result=$(find test-results/unit -name "*.trx" -type f | head -1)
     local load_result=$(find test-results/load -name "*.trx" -type f | head -1)
     
     if [ -n "$unit_result" ]; then
         print_info "Unit-тесты: результаты в $unit_result"
-        
-        # Простой анализ TRX файла (можно добавить более сложный парсинг)
+
         local unit_tests=$(grep -c "UnitTestResult" "$unit_result" 2>/dev/null || echo "0")
         local unit_passed=$(grep -c 'outcome="Passed"' "$unit_result" 2>/dev/null || echo "0")
         local unit_failed=$(grep -c 'outcome="Failed"' "$unit_result" 2>/dev/null || echo "0")
@@ -155,11 +141,7 @@ analyze_results() {
 }
 
 
-# Основной вызов
 run_tests
-
-# Опционально: генерация coverage отчета
-# generate_coverage
 
 print_success "=== ТЕСТИРОВАНИЕ ЗАВЕРШЕНО ==="
 exit 0

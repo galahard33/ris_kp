@@ -18,7 +18,7 @@ services:
 
   tests:
     build:
-      context: .  # ОБРАТИТЕ ВНИМАНИЕ: контекст - корневая папка
+      context: .  
       dockerfile: Dockerfile.tests
     tty: true 
     stdin_open: true
@@ -28,12 +28,10 @@ services:
       - webapp
       - worker
     volumes:
-      - ./test-results:/app/test-results  # для сохранения результатов
+      - ./test-results:/app/test-results  
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
       - TEST_MODE=true
-    # Команда уже указана в Dockerfile (CMD), но можно переопределить здесь если нужно
-    # command: ["dotnet", "test", "--logger:trx", "--results-directory:/app/test-results"]
 
 networks:
   gauss-network:
