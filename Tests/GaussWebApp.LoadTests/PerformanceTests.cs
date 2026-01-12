@@ -345,60 +345,140 @@ namespace GaussWebApp.LoadTests
         }
         
         // Вспомогательные методы для сохранения
-        private void SaveResultsToCSV(Dictionary<int, (double time, double speedup, double efficiency)> results, string filename)
+
+private string CreateResultsDirectory(string basePath)
+{
+    // Создаем папку TestResults в текущей директории
+    string resultsPath = Path.Combine(basePath, "TestResults");
+    
+    if (!Directory.Exists(resultsPath))
+    {
+        Directory.CreateDirectory(resultsPath);
+    }
+    
+    return resultsPath;
+}
+
+private string FindTestsFolder(string startPath)
+{
+    var directory = new DirectoryInfo(startPath);
+    
+    while (directory != null)
+    {
+        // Ищем папку Tests
+        var testsDir = directory.GetDirectories("Tests").FirstOrDefault();
+        if (testsDir != null)
+            return testsDir.FullName;
+        
+        // Или папку с тестами в проекте
+        var testProjects = directory.GetDirectories("*Test*")
+                                   .Where(d => d.Name.Contains("Test", StringComparison.OrdinalIgnoreCase))
+                                   .FirstOrDefault();
+        if (testProjects != null)
+            return testProjects.FullName;
+        
+        directory = directory.Parent;
+    }
+    
+    return null;
+}
+        
+private void SaveResultsToCSV(Dictionary<int, (double time, double speedup, double efficiency)> results, string filename)
+{
+    try
+    {
+        // 1. Определяем корень проекта или папку с тестами
+        string projectRoot = AppContext.BaseDirectory;
+        
+        // 2. Ищем папку Tests или создаем нужную структуру
+        string testsFolder = FindTestsFolder(projectRoot) ?? 
+                           CreateResultsDirectory(projectRoot);
+        
+        string filePath = Path.Combine(testsFolder, filename);
+        
+        // Используем инвариантную культуру для точки как десятичного разделителя
+        var lines = new List<string> { "Threads,Time(seconds),Speedup,Efficiency(%)" };
+        foreach (var kvp in results.OrderBy(r => r.Key))
         {
-            try
+            // Форматируем с точкой как десятичным разделителем
+            string timeStr = kvp.Value.time.ToString("F6", System.Globalization.CultureInfo.InvariantCulture);
+            string speedupStr = kvp.Value.speedup.ToString("F6", System.Globalization.CultureInfo.InvariantCulture);
+            string efficiencyStr = kvp.Value.efficiency.ToString("F6", System.Globalization.CultureInfo.InvariantCulture);
+            
+            lines.Add($"{kvp.Key},{timeStr},{speedupStr},{efficiencyStr}");
+        }
+        
+        File.WriteAllLines(filePath, lines);
+        Console.WriteLine($"\n✅ Файл сохранен в: {filePath}");
+        
+        // Показываем содержимое
+        Console.WriteLine($"\nСодержимое {filename}:");
+        foreach (var line in lines)
+        {
+            Console.WriteLine($"  {line}");
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"❌ Ошибка сохранения CSV: {ex.Message}");
+    }
+}
+
+private void SaveResultsToCSV(List<string> results, string filename)
+{
+    try
+    {
+        string projectRoot = AppContext.BaseDirectory;
+        string testsFolder = FindTestsFolder(projectRoot) ?? CreateResultsDirectory(projectRoot);
+        string filePath = Path.Combine(testsFolder, filename);
+        
+        // Обрабатываем строки для замены запятых на точки в числах
+        var processedLines = new List<string>();
+        
+        foreach (var line in results)
+        {
+            if (line.Contains("Размер,Время(сек),Память(МБ)") || !line.Contains(','))
             {
-                // Абсолютный путь к папке Tests
-                string testsFolder = "/home/wapadmin/sharp/ris_kp/Tests";
-                string filePath = Path.Combine(testsFolder, filename);
-                
-                var lines = new List<string> { "Threads,Time(seconds),Speedup,Efficiency(%)" };
-                foreach (var kvp in results.OrderBy(r => r.Key))
-                {
-                    lines.Add($"{kvp.Key},{kvp.Value.time:F6},{kvp.Value.speedup:F6},{kvp.Value.efficiency:F6}");
-                }
-                
-                File.WriteAllLines(filePath, lines);
-                Console.WriteLine($"\n✅ Файл сохранен в: {filePath}");
-                
-                // Показываем содержимое
-                Console.WriteLine($"\nСодержимое {filename}:");
-                Console.WriteLine("Threads,Time(seconds),Speedup,Efficiency(%)");
-                foreach (var line in lines.Skip(1))
-                {
-                    Console.WriteLine($"  {line}");
-                }
+                // Заголовок или строка без запятых
+                processedLines.Add(line);
             }
-            catch (Exception ex)
+            else
             {
-                Console.WriteLine($"❌ Ошибка сохранения CSV: {ex.Message}");
+                // Разбиваем строку на части
+                var parts = line.Split(',');
+                if (parts.Length >= 3)
+                {
+                    // Форматируем числовые значения с точкой
+                    string size = parts[0];
+                    string time = double.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture)
+                        .ToString("F3", System.Globalization.CultureInfo.InvariantCulture);
+                    string memory = double.Parse(parts[2], System.Globalization.CultureInfo.InvariantCulture)
+                        .ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
+                    
+                    processedLines.Add($"{size},{time},{memory}");
+                }
+                else
+                {
+                    processedLines.Add(line);
+                }
             }
         }
         
-        private void SaveResultsToCSV(List<string> results, string filename)
+        File.WriteAllLines(filePath, processedLines);
+        Console.WriteLine($"\n✅ Файл сохранен в: {filePath}");
+        
+        // Показываем содержимое
+        Console.WriteLine($"\nСодержимое {filename}:");
+        foreach (var line in processedLines)
         {
-            try
-            {
-                // Абсолютный путь к папке Tests
-                string testsFolder = "/home/wapadmin/sharp/ris_kp/Tests";
-                string filePath = Path.Combine(testsFolder, filename);
-                
-                File.WriteAllLines(filePath, results);
-                Console.WriteLine($"\n✅ Файл сохранен в: {filePath}");
-                
-                // Показываем содержимое
-                Console.WriteLine($"\nСодержимое {filename}:");
-                foreach (var line in results)
-                {
-                    Console.WriteLine($"  {line}");
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"❌ Ошибка сохранения CSV: {ex.Message}");
-            }
+            Console.WriteLine($"  {line}");
         }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"❌ Ошибка сохранения CSV: {ex.Message}");
+    }
+}
     }
     
     [CollectionDefinition("PerformanceTests")]
