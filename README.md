@@ -91,4 +91,4 @@
 - Анализирует использование памяти для разных размеров матриц
   
 ### 📈 Пример визуализации результата тестов:
-  ![alt text](scalability_analysis.png)
+  <img width="2086" height="1486" alt="scalability_analysis" src="https://github.com/user-attachments/assets/e88f5e44-0695-4a55-bb7e-82a57b888126" />
