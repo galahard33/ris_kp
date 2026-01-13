@@ -3,11 +3,24 @@ using GaussWebApp;
 using System.IO;
 using System.Text;
 using System;
+using System.Globalization;
 
 namespace GaussWebApp.UnitTests
 {
     public class MatrixIOTests
     {
+         private readonly CultureInfo _originalCulture;
+    
+    public MatrixIOTests()
+    {
+        _originalCulture = CultureInfo.CurrentCulture;
+        CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
+    }
+    
+    public void Dispose()
+    {
+        CultureInfo.CurrentCulture = _originalCulture;
+    }
         [Fact]
         public void SaveMatrixToStream_ValidData_WritesCorrectFormat()
         {
