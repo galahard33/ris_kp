@@ -4,10 +4,10 @@ using Microsoft.AspNetCore.DataProtection;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Для Docker всегда используем Development окружение
+// Для Docker используем Development окружение
 builder.Environment.EnvironmentName = "Development";
 
-// Отключаем DataProtection в Docker - используем эпиhemeral провайдер
+// Отключаем DataProtection в Docker - используем hemeral провайдер
 builder.Services.AddDataProtection()
     .UseEphemeralDataProtectionProvider();
 
@@ -26,11 +26,10 @@ builder.Services.AddControllersWithViews();
 
 var app = builder.Build();
 
-// Всегда показываем страницу ошибок разработчика в Docker
+// Всегда Docker
 app.UseDeveloperExceptionPage();
 
-// Отключаем HTTPS редирект в Docker
-// app.UseHttpsRedirection(); // Закомментируйте или удалите
+// app.UseHttpsRedirection(); // Отключаем HTTPS редирект в Docker
 
 app.UseStaticFiles();
 app.UseRouting();

@@ -11,19 +11,16 @@ namespace GaussWebApp.UnitTests
         [Fact]
         public void SaveMatrixToStream_ValidData_WritesCorrectFormat()
         {
-            // Arrange
             double[,] A = { { 1.5, 2.25 }, { 3.75, 4.125 } };
             double[] b = { 5.5, 6.75 };
 
-            // Act
             using var stream = MatrixIO.SaveMatrixToStream(A, b);
             stream.Position = 0;
             using var reader = new StreamReader(stream);
             string content = reader.ReadToEnd();
 
-            // Assert
             var lines = content.Trim().Split('\n');
-            Assert.Equal("2", lines[0].Trim()); // Размер матрицы
+            Assert.Equal("2", lines[0].Trim()); 
             Assert.Contains("1.5 2.25 | 5.5", lines[1]);
             Assert.Contains("3.75 4.125 | 6.75", lines[2]);
         }
@@ -31,16 +28,13 @@ namespace GaussWebApp.UnitTests
         [Fact]
         public void LoadMatrixFromStream_ValidFormat_LoadsCorrectly()
         {
-            // Arrange
             string matrixData = @"2
-1.5 2.25 | 5.5
-3.75 4.125 | 6.75";
+                                1.5 2.25 | 5.5
+                                3.75 4.125 | 6.75";
             using var stream = new MemoryStream(Encoding.UTF8.GetBytes(matrixData));
 
-            // Act
             var (A, b) = MatrixIO.LoadMatrixFromStream(stream);
 
-            // Assert
             Assert.Equal(2, b.Length);
             Assert.Equal(2, A.GetLength(0));
             Assert.Equal(2, A.GetLength(1));
@@ -57,16 +51,13 @@ namespace GaussWebApp.UnitTests
         [Fact]
         public void SaveAndLoadMatrix_RoundTrip_PreservesData()
         {
-            // Arrange
             double[,] originalA = { { 1.1, 2.2 }, { 3.3, 4.4 } };
             double[] originalB = { 5.5, 6.6 };
 
-            // Act
             using var stream = MatrixIO.SaveMatrixToStream(originalA, originalB);
             stream.Position = 0;
             var (loadedA, loadedB) = MatrixIO.LoadMatrixFromStream(stream);
 
-            // Assert
             Assert.Equal(originalA[0, 0], loadedA[0, 0], 6);
             Assert.Equal(originalA[0, 1], loadedA[0, 1], 6);
             Assert.Equal(originalA[1, 0], loadedA[1, 0], 6);
@@ -78,10 +69,8 @@ namespace GaussWebApp.UnitTests
         [Fact]
         public void LoadMatrixFromStream_EmptyStream_ThrowsException()
         {
-            // Arrange
             using var emptyStream = new MemoryStream();
 
-            // Act & Assert
             Assert.Throws<InvalidDataException>(() => 
                 MatrixIO.LoadMatrixFromStream(emptyStream));
         }
@@ -89,12 +78,10 @@ namespace GaussWebApp.UnitTests
         [Fact]
         public void LoadMatrixFromStream_InvalidFirstLine_ThrowsException()
         {
-            // Arrange
             string invalidData = @"not_a_number
 1 2 | 3";
             using var stream = new MemoryStream(Encoding.UTF8.GetBytes(invalidData));
 
-            // Act & Assert
             Assert.Throws<FormatException>(() => 
                 MatrixIO.LoadMatrixFromStream(stream));
         }
@@ -102,13 +89,11 @@ namespace GaussWebApp.UnitTests
         [Fact]
         public void LoadMatrixFromStream_MissingSeparator_ThrowsException()
         {
-            // Arrange
             string invalidData = @"2
-1 2 3
-4 5 6";
+                                1 2 3
+                                4 5 6";
             using var stream = new MemoryStream(Encoding.UTF8.GetBytes(invalidData));
 
-            // Act & Assert
             Assert.Throws<InvalidDataException>(() => 
                 MatrixIO.LoadMatrixFromStream(stream));
         }
@@ -116,13 +101,11 @@ namespace GaussWebApp.UnitTests
         [Fact]
         public void LoadMatrixFromStream_WrongColumnCount_ThrowsException()
         {
-            // Arrange
             string invalidData = @"2
-1 2 3 | 4
-5 6 | 7";
+                                1 2 3 | 4
+                                5 6 | 7";
             using var stream = new MemoryStream(Encoding.UTF8.GetBytes(invalidData));
 
-            // Act & Assert
             Assert.Throws<InvalidDataException>(() => 
                 MatrixIO.LoadMatrixFromStream(stream));
         }
@@ -130,14 +113,14 @@ namespace GaussWebApp.UnitTests
         [Fact]
         public void LoadMatrixFromStream_MissingRows_ThrowsException()
         {
-            // Arrange
+
             string invalidData = @"3
-1 2 | 3
-4 5 | 6";
-            // Третьей строки нет!
+                                1 2 | 3
+                                4 5 | 6";
+
             using var stream = new MemoryStream(Encoding.UTF8.GetBytes(invalidData));
 
-            // Act & Assert
+
             Assert.Throws<InvalidDataException>(() => 
                 MatrixIO.LoadMatrixFromStream(stream));
         }

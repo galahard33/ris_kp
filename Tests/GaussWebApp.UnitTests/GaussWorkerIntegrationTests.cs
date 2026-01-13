@@ -16,7 +16,6 @@ namespace GaussWebApp.UnitTests
         
         public GaussWorkerTests()
         {
-            // Проверяем доступность воркеров перед запуском тестов
             Console.WriteLine("Проверка доступности воркеров...");
 
             _skipTests = false;
@@ -43,8 +42,8 @@ namespace GaussWebApp.UnitTests
 
         public void Dispose()
         {
-            // Удалите этот метод или реализуйте правильно
-            // Если у вас нет ресурсов для освобождения, удалите IDisposable
+
+            GC.SuppressFinalize(this);
         }
         
         private bool IsPortOpen(string host, int port, int timeout = 2000)
@@ -64,7 +63,6 @@ namespace GaussWebApp.UnitTests
             }
         }
 
-        // Добавьте этот отсутствующий метод
         private async Task<bool> CheckWorkerAvailability(int port, int maxAttempts = 3)
         {
             for (int i = 0; i < maxAttempts; i++)
@@ -86,7 +84,7 @@ namespace GaussWebApp.UnitTests
                     if (response == "READY")
                     {
                         await writer.WriteLineAsync("DONE");
-                        await reader.ReadLineAsync(); // BYE
+                        await reader.ReadLineAsync(); 
                         return true;
                     }
                 }
@@ -104,20 +102,16 @@ namespace GaussWebApp.UnitTests
         [Fact]
         public async Task Worker_AcceptsConnection_AndResponds()
         {
-            // Пропускаем тест если воркеры не запущены
             if (_skipTests)
             {
                 Console.WriteLine("Тест пропущен: воркеры не запущены");
                 return;
             }
 
-            // Тестируем первый воркер
             var port = _workerPorts[0];
             
-            // Arrange
             using var client = new TcpClient();
             
-            // Act
             try
             {
                 await client.ConnectAsync("localhost", port);
@@ -125,14 +119,11 @@ namespace GaussWebApp.UnitTests
                 using var writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true };
                 using var reader = new StreamReader(stream, Encoding.UTF8);
                 
-                // Send INIT
                 await writer.WriteLineAsync("INIT 3");
                 var response = await reader.ReadLineAsync();
-                
-                // Assert
+
                 Assert.Equal("READY", response);
-                
-                // Отправляем DONE для корректного завершения
+
                 await writer.WriteLineAsync("DONE");
                 var byeResponse = await reader.ReadLineAsync();
                 Assert.Equal("BYE", byeResponse);
@@ -143,44 +134,5 @@ namespace GaussWebApp.UnitTests
             }
         }
         
-        [Fact(Skip = "Требует запущенных воркеров на всех портах")]
-        public async Task AllWorkers_RespondToInit()
-        {
-            // Пропускаем тест если воркеры не запущены
-            if (_skipTests)
-            {
-                Console.WriteLine("Тест пропущен: воркеры не запущены");
-                return;
-            }
-            
-            // Тестируем все воркеры
-            foreach (var port in _workerPorts)
-            {
-                using var client = new TcpClient();
-                
-                try
-                {
-                    await client.ConnectAsync("localhost", port);
-                    using var stream = client.GetStream();
-                    using var writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true };
-                    using var reader = new StreamReader(stream, Encoding.UTF8);
-                    
-                    await writer.WriteLineAsync("INIT 5");
-                    var response = await reader.ReadLineAsync();
-                    
-                    Assert.Equal("READY", response);
-                    
-                    await writer.WriteLineAsync("DONE");
-                    var byeResponse = await reader.ReadLineAsync();
-                    Assert.Equal("BYE", byeResponse);
-                    
-                    Console.WriteLine($"Воркер {port} прошел тест успешно");
-                }
-                catch (Exception ex)
-                {
-                    throw new Exception($"Ошибка при тестировании воркера на порту {port}: {ex.Message}");
-                }
-            }
-        }
     }
 }

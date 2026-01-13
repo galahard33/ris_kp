@@ -1,4 +1,3 @@
-
 set -e  
 
 RED='\033[0;31m'
@@ -38,11 +37,6 @@ run_tests() {
         exit 1
     fi
 
-    print_info "Создание папок для результатов..."
-    mkdir -p test-results/unit
-    mkdir -p test-results/load
-    mkdir -p test-results/coverage
-    
     print_info "Создание nodes.txt для тестов..."
     echo "worker:9001" > GaussWebApp/nodes.txt
     echo "worker:9002" >> GaussWebApp/nodes.txt
@@ -52,8 +46,6 @@ run_tests() {
     local unit_start=$(date +%s)
     
     if dotnet test Tests/GaussWebApp.UnitTests/GaussWebApp.UnitTests.csproj \
-        --logger "trx;LogFileName=unit-tests.trx" \
-        --results-directory test-results/unit \
         --verbosity normal; then
         local unit_end=$(date +%s)
         local unit_duration=$((unit_end - unit_start))
@@ -69,8 +61,6 @@ run_tests() {
     local load_start=$(date +%s)
     
     if dotnet test Tests/GaussWebApp.LoadTests/GaussWebApp.LoadTests.csproj \
-        --logger "trx;LogFileName=load-tests.trx" \
-        --results-directory test-results/load \
         --verbosity normal; then
         local load_end=$(date +%s)
         local load_duration=$((load_end - load_start))
@@ -82,64 +72,13 @@ run_tests() {
         print_warning "Время выполнения load-тестов: ${load_duration} секунд"
     fi
     
-    analyze_results
-
     local end_time=$(date +%s)
     local total_duration=$((end_time - start_time))
     
     print_info "=== ИТОГИ ТЕСТИРОВАНИЯ ==="
     print_info "Общее время выполнения: ${total_duration} секунд"
     print_info "Время завершения: $(date)"
-    print_info "Результаты сохранены в папке test-results/"
-    
-    print_info "Содержимое папки test-results/:"
-    find test-results -type f -name "*.trx" | while read file; do
-        print_info "  - $(basename "$file")"
-    done
 }
-
-analyze_results() {
-    print_info "=== АНАЛИЗ РЕЗУЛЬТАТОВ ==="
-
-    local unit_result=$(find test-results/unit -name "*.trx" -type f | head -1)
-    local load_result=$(find test-results/load -name "*.trx" -type f | head -1)
-    
-    if [ -n "$unit_result" ]; then
-        print_info "Unit-тесты: результаты в $unit_result"
-
-        local unit_tests=$(grep -c "UnitTestResult" "$unit_result" 2>/dev/null || echo "0")
-        local unit_passed=$(grep -c 'outcome="Passed"' "$unit_result" 2>/dev/null || echo "0")
-        local unit_failed=$(grep -c 'outcome="Failed"' "$unit_result" 2>/dev/null || echo "0")
-        
-        print_info "  Всего тестов: $unit_tests"
-        print_info "  Успешно: $unit_passed"
-        print_info "  Провалено: $unit_failed"
-        
-        if [ "$unit_failed" -eq "0" ]; then
-            print_success "  Все unit-тесты прошли успешно!"
-        else
-            print_warning "  Есть проваленные unit-тесты: $unit_failed"
-        fi
-    else
-        print_warning "Файл результатов unit-тестов не найден"
-    fi
-    
-    if [ -n "$load_result" ]; then
-        print_info "Load-тесты: результаты в $load_result"
-        
-        local load_tests=$(grep -c "UnitTestResult" "$load_result" 2>/dev/null || echo "0")
-        local load_passed=$(grep -c 'outcome="Passed"' "$load_result" 2>/dev/null || echo "0")
-        local load_failed=$(grep -c 'outcome="Failed"' "$load_result" 2>/dev/null || echo "0")
-        
-        print_info "  Всего тестов: $load_tests"
-        print_info "  Успешно: $load_passed"
-        print_info "  Провалено: $load_failed"
-    else
-        print_warning "Файл результатов load-тестов не найден"
-    fi
-    
-}
-
 
 run_tests
 

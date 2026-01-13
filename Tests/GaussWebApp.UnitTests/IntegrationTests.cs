@@ -8,24 +8,16 @@ using GaussWebApp.Models;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using System;
-using System.Collections.Generic; // ← ДОБАВЬТЕ ЭТО
+using System.Collections.Generic;
 
 namespace GaussWebApp.UnitTests
 {
     public class IntegrationTests
     {
-       [Fact(Skip = "Требует полной инфраструктуры и файла nodes.txt")]
-        public async Task HomeController_DistributedMethod_WithMockWorkers()
-        {
-            // Этот тест требует полной инфраструктуры
-            // Вместо этого пишем stub тест
-            Assert.True(true);
-        }
         
         [Fact]
         public async Task FileUpload_WithDistributedCalculation()
         {
-            // Arrange
             var controller = new HomeController();
             var model = new GaussViewModel
             {
@@ -33,8 +25,6 @@ namespace GaussWebApp.UnitTests
                 UploadedFile = CreateTestMatrixFile(50)
             };
             
-            // Act & Assert
-            // Тестируем полный цикл: загрузка файла -> распределённое решение
             var result = await controller.Index(model);
             
             Assert.IsType<ViewResult>(result);

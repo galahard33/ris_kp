@@ -4,7 +4,6 @@ import seaborn as sns
 import numpy as np
 import os
 
-# Настройки стиля
 plt.style.use('seaborn-v0_8-darkgrid')
 sns.set_palette("husl")
 
@@ -130,7 +129,7 @@ def visualize_memory_usage(csv_file):
     # 3. Эффективность использования памяти
     ax = axes[1, 1]
     df['Memory_per_Cell_MB'] = df['Память(МБ)'] / (df['Размер'] ** 2)
-    bars = ax.bar(range(len(df)), df['Memory_per_Cell_MB'] * 1024, color='orange', alpha=0.7)  # Переводим в КБ
+    bars = ax.bar(range(len(df)), df['Memory_per_Cell_MB'] * 1024, color='orange', alpha=0.7)  
     ax.set_xlabel('Размер матрицы', fontsize=12)
     ax.set_ylabel('Память на ячейку (КБ)', fontsize=12)
     ax.set_title('Память на элемент матрицы', fontsize=14, fontweight='bold')
@@ -159,179 +158,6 @@ def visualize_memory_usage(csv_file):
     print(f"\nСредняя память на элемент: {df['Memory_per_Cell_MB'].mean()*1024:.2f} КБ")
     print(f"Общий объем памяти для N=5000: {5000**2 * df['Memory_per_Cell_MB'].mean():.2f} МБ")
 
-def create_html_report():
-    """Создание HTML отчета"""
-    html_content = f"""
-    <!DOCTYPE html>
-    <html lang="ru">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Отчет по тестированию производительности</title>
-        <style>
-            body {{
-                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                margin: 0;
-                padding: 20px;
-                background-color: #f5f5f5;
-            }}
-            .container {{
-                max-width: 1200px;
-                margin: 0 auto;
-                background: white;
-                padding: 30px;
-                border-radius: 10px;
-                box-shadow: 0 0 20px rgba(0,0,0,0.1);
-            }}
-            h1, h2, h3 {{
-                color: #2c3e50;
-            }}
-            .stats-grid {{
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-                gap: 20px;
-                margin: 20px 0;
-            }}
-            .stat-card {{
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: white;
-                padding: 20px;
-                border-radius: 8px;
-                text-align: center;
-            }}
-            .stat-card h3 {{
-                margin-top: 0;
-                color: white;
-            }}
-            .stat-card .value {{
-                font-size: 2em;
-                font-weight: bold;
-                margin: 10px 0;
-            }}
-            .image-container {{
-                text-align: center;
-                margin: 30px 0;
-            }}
-            .image-container img {{
-                max-width: 100%;
-                border: 1px solid #ddd;
-                border-radius: 8px;
-            }}
-            table {{
-                width: 100%;
-                border-collapse: collapse;
-                margin: 20px 0;
-            }}
-            th, td {{
-                padding: 12px;
-                text-align: center;
-                border: 1px solid #ddd;
-            }}
-            th {{
-                background-color: #f2f2f2;
-            }}
-            .good {{
-                color: #27ae60;
-                font-weight: bold;
-            }}
-            .warning {{
-                color: #f39c12;
-                font-weight: bold;
-            }}
-            .bad {{
-                color: #e74c3c;
-                font-weight: bold;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>📊 Отчет по тестированию производительности</h1>
-            <p><strong>Дата генерации:</strong> {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
-            
-            <h2>📈 Основные показатели</h2>
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <h3>Лучшее ускорение</h3>
-                    <div class="value">2.13x</div>
-                    <p>при 8 потоках</p>
-                </div>
-                <div class="stat-card">
-                    <h3>Оптимальные потоки</h3>
-                    <div class="value">4</div>
-                    <p>наиболее эффективно</p>
-                </div>
-                <div class="stat-card">
-                    <h3>Максимальный размер</h3>
-                    <div class="value">1000×1000</div>
-                    <p>протестировано</p>
-                </div>
-            </div>
-            
-            <h2>📊 Визуализация результатов</h2>
-            <div class="image-container">
-                <h3>Анализ масштабируемости</h3>
-                <img src="scalability_analysis.png" alt="Анализ масштабируемости">
-            </div>
-            
-            <div class="image-container">
-                <h3>Анализ использования памяти</h3>
-                <img src="memory_analysis.png" alt="Анализ использования памяти">
-            </div>
-            
-            <h2>📋 Детальные данные</h2>
-            <h3>Масштабируемость</h3>
-            <table>
-                <tr>
-                    <th>Потоки</th>
-                    <th>Время (сек)</th>
-                    <th>Ускорение</th>
-                    <th>Эффективность</th>
-                </tr>
-                <tr>
-                    <td>1</td>
-                    <td>2.175</td>
-                    <td>1.00x</td>
-                    <td class="good">100.0%</td>
-                </tr>
-                <tr>
-                    <td>2</td>
-                    <td>1.569</td>
-                    <td>1.39x</td>
-                    <td class="good">69.3%</td>
-                </tr>
-                <tr>
-                    <td>4</td>
-                    <td>1.051</td>
-                    <td>2.07x</td>
-                    <td class="warning">51.7%</td>
-                </tr>
-                <tr>
-                    <td>8</td>
-                    <td>1.021</td>
-                    <td>2.13x</td>
-                    <td class="bad">26.6%</td>
-                </tr>
-            </table>
-            
-            <h3>Выводы</h3>
-            <ul>
-                <li>Алгоритм демонстрирует ожидаемую сложность O(n³)</li>
-                <li>Параллельная версия дает ускорение до 2.13x</li>
-                <li>Оптимальное число потоков: 4</li>
-                <li>При 8 потоках эффективность падает до 26.6%</li>
-                <li>Потребление памяти растет квадратично</li>
-            </ul>
-        </div>
-    </body>
-    </html>
-    """
-    
-    with open('performance_report.html', 'w', encoding='utf-8') as f:
-        f.write(html_content)
-    
-    print("\n✅ HTML отчет создан: performance_report.html")
-
 def main():
     """Основная функция"""
     print("="*60)
@@ -359,19 +185,17 @@ def main():
         # Визуализируем использование памяти
         visualize_memory_usage(files['memory'])
         
-        # Создаем HTML отчет
-        create_html_report()
-        
         print("\n" + "="*60)
         print("✅ Визуализация завершена успешно!")
         print("Созданные файлы:")
         print("  - scalability_analysis.png")
         print("  - memory_analysis.png")
-        print("  - performance_report.html")
         print("="*60)
         
     except Exception as e:
         print(f"❌ Ошибка при визуализации: {e}")
+        print("Убедитесь, что установлены все зависимости:")
+        print("  pip install pandas matplotlib seaborn numpy scipy")
 
 if __name__ == "__main__":
     main()

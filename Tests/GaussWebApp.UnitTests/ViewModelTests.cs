@@ -11,10 +11,8 @@ namespace GaussWebApp.UnitTests
         [Fact]
         public void GaussViewModel_DefaultValues_AreCorrect()
         {
-            // Arrange & Act
             var model = new GaussViewModel();
 
-            // Assert
             Assert.Equal(1000, model.MatrixSize);
             Assert.Equal(CalculationMethod.Parallel, model.CalculationMethod);
             Assert.Equal(4, model.ThreadCount);
@@ -29,10 +27,8 @@ namespace GaussWebApp.UnitTests
         [InlineData(5000)]
         public void GaussViewModel_MatrixSize_ValidRange(int size)
         {
-            // Arrange
             var model = new GaussViewModel { MatrixSize = size };
 
-            // Act & Assert
             Assert.Equal(size, model.MatrixSize);
         }
 
@@ -44,30 +40,25 @@ namespace GaussWebApp.UnitTests
         [InlineData(16)]
         public void GaussViewModel_ThreadCount_ValidValues(int threadCount)
         {
-            // Arrange
             var model = new GaussViewModel 
             { 
                 CalculationMethod = CalculationMethod.Parallel,
                 ThreadCount = threadCount 
             };
 
-            // Act & Assert
             Assert.Equal(threadCount, model.ThreadCount);
         }
 
         [Fact]
         public void GaussViewModel_FileUpload_CanBeSet()
         {
-            // Arrange
             var model = new GaussViewModel();
             var file = new FormFile(
                 new MemoryStream(Encoding.UTF8.GetBytes("test")),
                 0, 4, "test.txt", "test.txt");
 
-            // Act
             model.UploadedFile = file;
 
-            // Assert
             Assert.NotNull(model.UploadedFile);
             Assert.Equal("test.txt", model.UploadedFile.FileName);
         }
@@ -78,11 +69,9 @@ namespace GaussWebApp.UnitTests
         [Fact]
         public void CalculationMethod_HasCorrectValues()
         {
-            // Arrange & Act
             var parallel = CalculationMethod.Parallel;
             var distributed = CalculationMethod.Distributed;
 
-            // Assert
             Assert.Equal(0, (int)parallel);
             Assert.Equal(1, (int)distributed);
         }

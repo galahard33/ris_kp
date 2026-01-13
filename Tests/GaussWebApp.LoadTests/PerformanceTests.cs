@@ -38,17 +38,14 @@ namespace GaussWebApp.LoadTests
         [InlineData(1000)]
         public void SequentialGauss_PerformanceTest(int size)
         {
-            // Arrange
             var (matrix, vector) = GetOrCreateMatrix(size);
             var A = GaussSolver.Clone(matrix);
             var x = (double[])vector.Clone();
             
-            // Act
             var stopwatch = Stopwatch.StartNew();
             GaussSolver.SolveGaussSequential(A, x);
             stopwatch.Stop();
             
-            // Упрощенная проверка
             Assert.NotNull(x);
             Assert.Equal(size, x.Length);
             
@@ -68,17 +65,14 @@ namespace GaussWebApp.LoadTests
         [InlineData(1000, 8)]
         public void ParallelVsSequential_Comparison(int size, int threads)
         {
-            // Arrange
             var (matrix, vector) = GetOrCreateMatrix(size);
             
-            // Последовательный метод
             var swSeq = Stopwatch.StartNew();
             var A_seq = GaussSolver.Clone(matrix);
             var x_seq = (double[])vector.Clone();
             GaussSolver.SolveGaussSequential(A_seq, x_seq);
             swSeq.Stop();
-            
-            // Параллельный метод
+
             var swPar = Stopwatch.StartNew();
             var A_par = GaussSolver.Clone(matrix);
             var x_par = (double[])vector.Clone();
@@ -89,7 +83,6 @@ namespace GaussWebApp.LoadTests
             GaussSolver.SolveGaussParallel(A_par, x_par, options);
             swPar.Stop();
             
-            // Упрощенная проверка
             double maxError = 0;
             int checkCount = Math.Min(50, size);
             for (int i = 0; i < checkCount; i++)
@@ -97,7 +90,6 @@ namespace GaussWebApp.LoadTests
                 maxError = Math.Max(maxError, Math.Abs(x_seq[i] - x_par[i]));
             }
             
-            // Результаты
             double speedup = swSeq.Elapsed.TotalSeconds / swPar.Elapsed.TotalSeconds;
             double efficiency = speedup / threads * 100;
             
@@ -107,7 +99,6 @@ namespace GaussWebApp.LoadTests
             Console.WriteLine($"  Ускорение: {speedup:F2}x (эфф. {efficiency:F1}%)");
             Console.WriteLine($"  Разница: {maxError:E6}");
 
-            // Ослабленное условие
             if (maxError > 1e-3)
             {
                 Console.WriteLine($"  ВНИМАНИЕ: разница большая, но допустимая для нагрузочного теста");
@@ -151,7 +142,6 @@ namespace GaussWebApp.LoadTests
                 
                 stopwatch.Stop();
                 
-                // Базовая проверка
                 Assert.NotNull(x);
                 Assert.Equal(size, x.Length);
                 
@@ -182,21 +172,18 @@ namespace GaussWebApp.LoadTests
             var sizes = new[] { 100, 500, 1000 };
             var results = new List<string> { "Размер,Время(сек),Память(МБ)" };
             
-            // Предварительная сборка мусора
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
             
             foreach (var size in sizes)
             {
-                // Измеряем память ДО
                 GC.Collect();
                 GC.WaitForPendingFinalizers();
                 long memoryBefore = GC.GetTotalMemory(true);
                 
                 var stopwatch = Stopwatch.StartNew();
                 
-                // Генерируем и решаем
                 var (matrix, vector) = GaussSolver.GenerateMatrix(size);
                 var A = GaussSolver.Clone(matrix);
                 var x = (double[])vector.Clone();
@@ -204,10 +191,8 @@ namespace GaussWebApp.LoadTests
                 
                 stopwatch.Stop();
                 
-                // Измеряем память ПОСЛЕ
                 long memoryAfter = GC.GetTotalMemory(true);
                 
-                // Базовая проверка
                 Assert.NotNull(x);
                 Assert.Equal(size, x.Length);
                 
@@ -216,12 +201,10 @@ namespace GaussWebApp.LoadTests
                 
                 Console.WriteLine($"[{size}×{size}]: {stopwatch.Elapsed.TotalSeconds:F3} сек, {memoryUsedMB:F2} МБ");
                 
-                // Очищаем память
                 GC.Collect();
                 GC.WaitForPendingFinalizers();
             }
             
-            // Сохраняем результаты
             SaveResultsToCSV(results, "memory-usage.csv");
         }
         
@@ -234,12 +217,10 @@ namespace GaussWebApp.LoadTests
             
             var times = new List<double>();
             
-            // Генерируем матрицу один раз
             var (matrix, vector) = GetOrCreateMatrix(size);
             
             for (int i = 0; i < iterations; i++)
             {
-                // Клонируем для каждого запуска
                 var A = GaussSolver.Clone(matrix);
                 var x = (double[])vector.Clone();
                 
@@ -247,7 +228,6 @@ namespace GaussWebApp.LoadTests
                 GaussSolver.SolveGaussSequential(A, x);
                 stopwatch.Stop();
                 
-                // Базовая проверка
                 Assert.NotNull(x);
                 Assert.Equal(size, x.Length);
                 
@@ -255,7 +235,6 @@ namespace GaussWebApp.LoadTests
                 Console.WriteLine($"[Стабильность] Итерация {i + 1}: {stopwatch.Elapsed.TotalSeconds:F3} сек");
             }
             
-            // Простая проверка стабильности
             if (times.Count > 1)
             {
                 double avgTime = times.Average();
@@ -304,7 +283,6 @@ namespace GaussWebApp.LoadTests
                 
                 stopwatch.Stop();
                 
-                // Базовая проверка
                 Assert.NotNull(x);
                 Assert.Equal(config.Size, x.Length);
                 
@@ -323,10 +301,8 @@ namespace GaussWebApp.LoadTests
             var A = GaussSolver.Clone(matrix);
             var x = (double[])vector.Clone();
             
-            // Решаем
             GaussSolver.SolveGaussSequential(A, x);
             
-            // Проверяем решение
             double maxResidual = 0;
             for (int i = 0; i < size; i++)
             {
@@ -344,11 +320,9 @@ namespace GaussWebApp.LoadTests
             Assert.True(maxResidual < 1e-9, $"Невязка слишком велика: {maxResidual:E6}");
         }
         
-        // Вспомогательные методы для сохранения
 
 private string CreateResultsDirectory(string basePath)
 {
-    // Создаем папку TestResults в текущей директории
     string resultsPath = Path.Combine(basePath, "TestResults");
     
     if (!Directory.Exists(resultsPath))
@@ -359,21 +333,42 @@ private string CreateResultsDirectory(string basePath)
     return resultsPath;
 }
 
-private string FindTestsFolder(string startPath)
+private string FindTestsFolder(string startPath, bool findLoadTests = true)
 {
     var directory = new DirectoryInfo(startPath);
     
     while (directory != null)
     {
-        // Ищем папку Tests
         var testsDir = directory.GetDirectories("Tests").FirstOrDefault();
         if (testsDir != null)
+        {
+            if (findLoadTests)
+            {
+                // Ищем папку LoadTests внутри Tests
+                var loadTestsDir = testsDir.GetDirectories("*LoadTests*").FirstOrDefault();
+                if (loadTestsDir != null)
+                    return loadTestsDir.FullName;
+            }
+            else
+            {
+                var unitTestsDir = testsDir.GetDirectories("*UnitTests*").FirstOrDefault();
+                if (unitTestsDir != null)
+                    return unitTestsDir.FullName;
+            }
+            
             return testsDir.FullName;
+        }
         
-        // Или папку с тестами в проекте
         var testProjects = directory.GetDirectories("*Test*")
-                                   .Where(d => d.Name.Contains("Test", StringComparison.OrdinalIgnoreCase))
-                                   .FirstOrDefault();
+            .Where(d => 
+            {
+                if (findLoadTests)
+                    return d.Name.Contains("LoadTest", StringComparison.OrdinalIgnoreCase);
+                else
+                    return d.Name.Contains("UnitTest", StringComparison.OrdinalIgnoreCase);
+            })
+            .FirstOrDefault();
+        
         if (testProjects != null)
             return testProjects.FullName;
         
@@ -387,20 +382,16 @@ private void SaveResultsToCSV(Dictionary<int, (double time, double speedup, doub
 {
     try
     {
-        // 1. Определяем корень проекта или папку с тестами
         string projectRoot = AppContext.BaseDirectory;
         
-        // 2. Ищем папку Tests или создаем нужную структуру
         string testsFolder = FindTestsFolder(projectRoot) ?? 
                            CreateResultsDirectory(projectRoot);
         
         string filePath = Path.Combine(testsFolder, filename);
         
-        // Используем инвариантную культуру для точки как десятичного разделителя
         var lines = new List<string> { "Threads,Time(seconds),Speedup,Efficiency(%)" };
         foreach (var kvp in results.OrderBy(r => r.Key))
         {
-            // Форматируем с точкой как десятичным разделителем
             string timeStr = kvp.Value.time.ToString("F6", System.Globalization.CultureInfo.InvariantCulture);
             string speedupStr = kvp.Value.speedup.ToString("F6", System.Globalization.CultureInfo.InvariantCulture);
             string efficiencyStr = kvp.Value.efficiency.ToString("F6", System.Globalization.CultureInfo.InvariantCulture);
@@ -411,7 +402,6 @@ private void SaveResultsToCSV(Dictionary<int, (double time, double speedup, doub
         File.WriteAllLines(filePath, lines);
         Console.WriteLine($"\n✅ Файл сохранен в: {filePath}");
         
-        // Показываем содержимое
         Console.WriteLine($"\nСодержимое {filename}:");
         foreach (var line in lines)
         {
@@ -432,23 +422,19 @@ private void SaveResultsToCSV(List<string> results, string filename)
         string testsFolder = FindTestsFolder(projectRoot) ?? CreateResultsDirectory(projectRoot);
         string filePath = Path.Combine(testsFolder, filename);
         
-        // Обрабатываем строки для замены запятых на точки в числах
         var processedLines = new List<string>();
         
         foreach (var line in results)
         {
             if (line.Contains("Размер,Время(сек),Память(МБ)") || !line.Contains(','))
             {
-                // Заголовок или строка без запятых
                 processedLines.Add(line);
             }
             else
             {
-                // Разбиваем строку на части
                 var parts = line.Split(',');
                 if (parts.Length >= 3)
                 {
-                    // Форматируем числовые значения с точкой
                     string size = parts[0];
                     string time = double.Parse(parts[1], System.Globalization.CultureInfo.InvariantCulture)
                         .ToString("F3", System.Globalization.CultureInfo.InvariantCulture);
@@ -467,7 +453,6 @@ private void SaveResultsToCSV(List<string> results, string filename)
         File.WriteAllLines(filePath, processedLines);
         Console.WriteLine($"\n✅ Файл сохранен в: {filePath}");
         
-        // Показываем содержимое
         Console.WriteLine($"\nСодержимое {filename}:");
         foreach (var line in processedLines)
         {

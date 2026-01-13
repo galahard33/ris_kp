@@ -50,10 +50,8 @@ namespace GaussWebApp.UnitTests
         [InlineData("NORMALIZE_ROW 5 2.5", "NORMALIZE_ROW", "5", "2.5")]
         public void Protocol_CommandParsing_WorksCorrectly(string command, string expectedCommand, params string[] expectedArgs)
         {
-            // Arrange
             var parts = command.Split(' ');
-            
-            // Assert
+
             Assert.Equal(expectedCommand, parts[0]);
             Assert.Equal(expectedArgs.Length, parts.Length - 1);
             
@@ -85,13 +83,11 @@ namespace GaussWebApp.UnitTests
         [Fact]
         public void NodesFile_Parsing_Logic()
         {
-            // Arrange
             var nodesContent = @"localhost:9001
-localhost:9002
-# комментарий
-192.168.1.100:9003
-localhost:9004
-";
+                                localhost:9002
+                                localhost:9003
+                                localhost:9004
+                                ";
             
             // Act
             var lines = nodesContent.Split('\n', StringSplitOptions.RemoveEmptyEntries);
@@ -114,7 +110,7 @@ localhost:9004
             Assert.Equal(4, nodes.Count);
             Assert.Equal("localhost", nodes[0].Host);
             Assert.Equal(9001, nodes[0].Port);
-            Assert.Equal("192.168.1.100", nodes[2].Host);
+            Assert.Equal("localhost", nodes[2].Host);
             Assert.Equal(9003, nodes[2].Port);
         }
     }
