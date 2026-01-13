@@ -13,7 +13,6 @@ artifacts/
 *.nuget.props
 *.nuget.targets
 *.csv
-*.png
 
 # ========================================
 # Visual Studio
