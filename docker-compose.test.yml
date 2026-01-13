@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  webapp:
+    build: ./GaussWebApp
+    ports:
+      - "8080:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+    networks:
+      - gauss-network
+
+  worker:
+    build: ./GaussWorker
+    command: ["9001"]
+    networks:
+      - gauss-network
+
+  tests:
+    build:
+      context: .  
+      dockerfile: Dockerfile.tests
+    tty: true 
+    stdin_open: true
+    networks:
+      - gauss-network
+    depends_on:
+      - webapp
+      - worker
+    volumes:
+      - ./test-results:/app/test-results  
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - TEST_MODE=true
+
+networks:
+  gauss-network:
+    driver: bridge

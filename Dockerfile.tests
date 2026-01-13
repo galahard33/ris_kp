@@ -1,0 +1,26 @@
+FROM mcr.microsoft.com/dotnet/sdk:8.0
+WORKDIR /app
+
+COPY . .
+
+RUN sed -i 's/\r$//' /app/run-tests.sh && \
+    chmod +x /app/run-tests.sh
+
+RUN dotnet restore GaussWebApp/GaussWebApp.csproj && \
+    dotnet restore GaussWorker/GaussWorker.csproj && \
+    dotnet restore Tests/GaussWebApp.UnitTests/GaussWebApp.UnitTests.csproj && \
+    dotnet restore Tests/GaussWebApp.LoadTests/GaussWebApp.LoadTests.csproj
+
+RUN dotnet build GaussWebApp/GaussWebApp.csproj -c Release --no-restore && \
+    dotnet build GaussWorker/GaussWorker.csproj -c Release --no-restore && \
+    dotnet build Tests/GaussWebApp.UnitTests/GaussWebApp.UnitTests.csproj -c Release --no-restore && \
+    dotnet build Tests/GaussWebApp.LoadTests/GaussWebApp.LoadTests.csproj -c Release --no-restore
+
+RUN mkdir -p /app/GaussWebApp && \
+    echo -e "worker:9001\nworker:9002\nworker:9003" > /app/GaussWebApp/nodes.txt
+
+RUN echo "=== Проверка скрипта ===" && \
+    ls -la /app/run-tests.sh && \
+    head -1 /app/run-tests.sh
+
+CMD ["/app/run-tests.sh"]

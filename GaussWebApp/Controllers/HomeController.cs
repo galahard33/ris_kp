@@ -89,7 +89,6 @@ namespace GaussWebApp.Controllers
                     (x2, t2, model.NodeCount, model.NodeInfo) = await SolveDistributedAsync(loadedA, loadedB);
                     if (x2 == null)
                     {
-                        // Ошибка уже установлена в SolveDistributedAsync
                         return View(model);
                     }
                 }
@@ -172,7 +171,7 @@ namespace GaussWebApp.Controllers
 
             var _locks = new SemaphoreSlim[p];
             for (int i = 0; i < p; i++)
-                _locks[i] = new SemaphoreSlim(1, 1); // 1 поток может войти
+                _locks[i] = new SemaphoreSlim(1, 1);
 
                 async Task<string> SendCommandWithLock(int worker, StreamWriter writer, StreamReader reader, string command)
     {
@@ -188,7 +187,6 @@ namespace GaussWebApp.Controllers
         }
     }
     
-    // Локальная функция для отправки столбца с блокировкой
     async Task SendColumnWithLock(int worker, int columnIndex)
     {
         await _locks[worker].WaitAsync();
@@ -204,7 +202,6 @@ namespace GaussWebApp.Controllers
         }
     }
     
-    // Локальная функция для получения столбца с блокировкой
             async Task<double[]> GetColumnWithLock(int worker, int columnIndex)
             {
                 await _locks[worker].WaitAsync();
@@ -250,7 +247,7 @@ namespace GaussWebApp.Controllers
                 var columnTasks = new List<Task>();
                 for (int j = 0; j < n; j++)
                 {
-                    int columnIndex = j; // capture для замыкания
+                    int columnIndex = j;
                     int nodeIdx = columnIndex % p;
                     
                     columnTasks.Add(Task.Run(async () =>
@@ -290,7 +287,7 @@ namespace GaussWebApp.Controllers
                     var vectorTasks = new List<Task>();
                     for (int workerIndex = 0; workerIndex < p; workerIndex++)
                     {
-                        int worker = workerIndex; // capture для замыкания
+                        int worker = workerIndex;
                         
                         vectorTasks.Add(Task.Run(async () =>
                         {
@@ -351,7 +348,7 @@ for (int k = 0; k < n - 1; k++)
             var swapTasks = new List<Task<string>>();
             for (int w = 0; w < p; w++)
             {
-                int worker = w; // capture
+                int worker = w;
                 
                 swapTasks.Add(Task.Run(async () =>
                 {
@@ -392,14 +389,13 @@ for (int k = 0; k < n - 1; k++)
     
     Console.WriteLine($"[Контроллер] Шаг {k}: делим строку {k} на {pivotValue:E6}");
     
-    // Сначала обновляем локальный вектор b
     b_local[k] /= pivotValue;
     
     // Отправляем команды на нормализацию всем воркерам
         var normalizeTasks = new List<Task<(string, string)>>();
         for (int w = 0; w < p; w++)
         {
-            int worker = w; // capture
+            int worker = w;
             
             normalizeTasks.Add(Task.Run(async () =>
             {
@@ -446,9 +442,6 @@ for (int k = 0; k < n - 1; k++)
         b_local[i] -= multipliers[i] * b_local[k];
     }
     
-    // Теперь отправляем операции исключения для матрицы A каждому воркеру
-    // Каждый воркер должен обновить ВСЕ свои столбцы для ВСЕХ строк i > k
-    
     // Разделяем операции по воркерам для эффективности
 var eliminateTasks = new List<Task<string>>();
 for (int w = 0; w < p; w++)
@@ -482,7 +475,7 @@ for (int w = 0; w < p; w++)
                 _locks[worker].Release();
             }
         }
-        return "OK"; // Нет операций - нет ошибок
+        return "OK";
     }));
 }
 
@@ -530,13 +523,12 @@ for (int w = 0; w < p; w++)
 Console.WriteLine($"[Контроллер] Прямой ход завершен");
 
     // 7. После прямого хода все воркеры должны иметь верхнюю треугольную матрицу
-    // Получаем диагональные элементы для обратного хода
 var diag = new double[n];
 var diagTasks = new List<Task<(int, double)>>();
 
 for (int k = 0; k < n; k++)
 {
-    int row = k; // capture
+    int row = k;
     int workerIdx = row % p;
     
     diagTasks.Add(Task.Run(async () =>
@@ -583,7 +575,7 @@ for (int i = n - 1; i >= 0; i--)
     var rowTasks = new List<Task<(int, double)>>();
     for (int j = i + 1; j < n; j++)
     {
-        int column = j; // capture
+        int column = j;
         int workerIdx = column % p;
         
         rowTasks.Add(Task.Run(async () =>
